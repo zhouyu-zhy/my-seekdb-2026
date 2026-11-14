@@ -138,6 +138,28 @@ bool is_ai_vector_column(const ObColumnSchemaV2 &column)
   return is_vector;
 }
 
+// Returns the declared dimension of a VECTOR(n) column, or -1 when unknown.
+int64_t get_ai_column_vector_dim(const ObColumnSchemaV2 &column)
+{
+  int64_t dim = -1;
+  if (is_ai_vector_column(column)) {
+    const ObString &type_str = column.get_extended_type_info().at(0);
+    int64_t open = -1;
+    int64_t close = -1;
+    for (int64_t i = 0; i < type_str.length(); ++i) {
+      if ('(' == type_str[i] && open < 0) {
+        open = i;
+      } else if (')' == type_str[i]) {
+        close = i;
+      }
+    }
+    if (open >= 0 && close > open + 1) {
+      dim = strtoll(type_str.ptr() + open + 1, nullptr, 10);
+    }
+  }
+  return dim;
+}
+
 int check_ai_column_type(const ParseNode *expr_node, const ObColumnSchemaV2 &column)
 {
   int ret = OB_SUCCESS;
@@ -150,9 +172,17 @@ int check_ai_column_type(const ParseNode *expr_node, const ObColumnSchemaV2 &col
   } else {
     func_name.assign_ptr(name_node->str_value_, static_cast<int32_t>(name_node->str_len_));
     if (0 == func_name.case_compare("ai_complete")) {
-      if (!column.is_string_type() && !column.is_json()) {
+      // A completion result is rendered as text, so any column that can hold a
+      // scalar answer is acceptable: character/json documents and the integer
+      // family (the integer flavour gets the "single base-10 integer" prompt).
+      const ObObjType type = column.get_data_type();
+      const bool scalar_result = column.is_string_type()
+                                 || column.is_json()
+                                 || (ob_is_integer_type(type)
+                                     && ObTinyIntType != type);
+      if (!scalar_result) {
         ret = OB_NOT_SUPPORTED;
-        LOG_USER_ERROR(OB_NOT_SUPPORTED, "ai_complete column type, expected string or json");
+        LOG_USER_ERROR(OB_NOT_SUPPORTED, "ai_complete column type, expected string, json or integer");
       }
     } else if (0 == func_name.case_compare("ai_embed")) {
       if (!is_ai_vector_column(column)) {
@@ -2170,6 +2200,14 @@ int ObDDLResolver::resolve_column_definition(ObColumnSchemaV2 &column,
             } else if (OB_FAIL(column.set_ai_column_embed_model(embed_model))) {
             } else if (OB_FAIL(column.set_ai_column_embed_input(embed_input))) {
             } else if (OB_FAIL(column.set_ai_column_embed_dimension(embed_dimension))) {
+            } else {
+              const int64_t column_dim = get_ai_column_vector_dim(column);
+              if (column_dim > 0 && embed_dimension != column_dim) {
+                ret = OB_ERR_INVALID_VECTOR_DIM;
+                LOG_USER_ERROR(OB_ERR_INVALID_VECTOR_DIM,
+                               static_cast<uint32_t>(column_dim),
+                               static_cast<uint32_t>(embed_dimension));
+              }
             }
           } else if (0 == func_name.case_compare("ai_complete")) {
             ObString complete_model;

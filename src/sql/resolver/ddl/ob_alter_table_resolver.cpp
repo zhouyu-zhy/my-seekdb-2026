@@ -28,6 +28,7 @@
 #include "common/mysqlclient/ob_mysql_proxy.h"
 #include "lib/string/ob_sql_string.h"
 #include "share/ob_server_struct.h"
+#include "share/schema/ob_ai_column_common.h"
 
 namespace oceanbase
 {
@@ -46,7 +47,8 @@ ObAlterTableResolver::ObAlterTableResolver(ObResolverParams &params)
       add_or_modify_check_cst_times_(0),
       modify_constraint_times_(0),
       add_not_null_constraint_(false),
-      add_column_cnt_(0)
+      add_column_cnt_(0),
+      retry_ai_column_executed_(false)
 {
 }
 
@@ -61,6 +63,7 @@ int ObAlterTableResolver::resolve(const ParseNode &parse_tree)
   if (OB_ISNULL(session_info_)) {
     ret = OB_ERR_UNEXPECTED;
     SQL_RESV_LOG(WARN, "session_info should not be null", K(ret));
+  } else if (FALSE_IT(retry_ai_column_executed_ = false)) {
   } else if (T_ALTER_TABLE != parse_tree.type_ ||
       ALTER_TABLE_NODE_COUNT != parse_tree.num_child_ ||
       OB_ISNULL(parse_tree.children_)) {
@@ -713,6 +716,16 @@ int ObAlterTableResolver::resolve_action_list(const ParseNode &node)
       }
     }
     if (OB_SUCC(ret)) {
+      // Every column option, RETRY AI COLUMN included, is one action node, so
+      // a standalone retry shows up as exactly one action here.
+      if (retry_ai_column_executed_
+          && alter_table_stmt->get_alter_table_action_count() > 1) {
+        // RETRY AI COLUMN cannot share an ALTER statement with regular actions.
+        ret = OB_NOT_SUPPORTED;
+        LOG_USER_ERROR(OB_NOT_SUPPORTED, "combining AI COLUMN RETRY with another ALTER action");
+      }
+    }
+    if (OB_SUCC(ret)) {
       if (alter_table_stmt->get_alter_table_action_count() > 1) {
         if(0 != alter_table_stmt->get_foreign_key_arg_list().count()) {
           // suppored in mysql
@@ -767,6 +780,29 @@ int ObAlterTableResolver::resolve_column_options(const ParseNode &node,
   if (T_ALTER_COLUMN_OPTION != node.type_ || OB_ISNULL(node.children_)) {
     ret = OB_ERR_UNEXPECTED;
     SQL_RESV_LOG(WARN, "invalid parse tree!", K(ret));
+  } else if (OB_ISNULL(table_schema_)) {
+    ret = OB_ERR_UNEXPECTED;
+    SQL_RESV_LOG(WARN, "table_schema is null", K(ret));
+  } else {
+    // RETRY AI COLUMN is a standalone maintenance statement; refuse it when
+    // the same option list also carries regular alter actions.
+    bool saw_retry_action = false;
+    bool saw_other_action = false;
+    for (int32_t i = 0; !saw_other_action && i < node.num_child_; ++i) {
+      if (OB_NOT_NULL(node.children_[i])) {
+        if (T_RETRY_AI_COLUMN == node.children_[i]->type_) {
+          saw_retry_action = true;
+        } else {
+          saw_other_action = true;
+        }
+      }
+    }
+    if (saw_retry_action && saw_other_action) {
+      ret = OB_NOT_SUPPORTED;
+      LOG_USER_ERROR(OB_NOT_SUPPORTED, "combining AI COLUMN RETRY with another ALTER action");
+    }
+  }
+  if (OB_FAIL(ret)) {
   } else if (OB_ISNULL(table_schema_)) {
     ret = OB_ERR_UNEXPECTED;
     SQL_RESV_LOG(WARN, "table_schema is null", K(ret));
@@ -833,6 +869,7 @@ int ObAlterTableResolver::resolve_column_options(const ParseNode &node,
           break;
         }
         case T_RETRY_AI_COLUMN: {
+          retry_ai_column_executed_ = true;
           if (OB_FAIL(resolve_retry_ai_column(*column_node))) {
           }
           break;
@@ -3490,10 +3527,8 @@ int ObAlterTableResolver::resolve_retry_ai_column(const ParseNode &node)
     column_name.assign_ptr(column_node->str_value_, static_cast<int32_t>(column_node->str_len_));
     if (OB_ISNULL(ai_column = table_schema_->get_column_schema(column_name))
         || !ai_column->is_ai_column()) {
-      ret = OB_ERR_BAD_FIELD_ERROR;
-      LOG_USER_ERROR(OB_ERR_BAD_FIELD_ERROR, column_name.length(), column_name.ptr(),
-                     table_schema_->get_table_name_str().length(),
-                     table_schema_->get_table_name_str().ptr());
+      ret = OB_NOT_SUPPORTED;
+      LOG_USER_ERROR(OB_NOT_SUPPORTED, "retrying a column that is not an AI column");
     } else if (OB_ISNULL(status_column = table_schema_->get_column_schema(
                            ai_column->get_ai_column_status_column_id()))) {
       ret = OB_ERR_UNEXPECTED;
@@ -3506,6 +3541,8 @@ int ObAlterTableResolver::resolve_retry_ai_column(const ParseNode &node)
   if (OB_SUCC(ret)) {
     const ObString &db_name = db_schema->get_database_name_str();
     const ObString &table_name = table_schema_->get_table_name_str();
+    const ObColumnSchemaV2 *gen_column = table_schema_->get_column_schema(
+        ai_column->get_ai_column_gen_column_id());
     ObSqlString sql;
     if (OB_FAIL(sql.append_fmt("UPDATE `%.*s`.`%.*s` SET `%.*s` = NULL, `%.*s` = 0",
                                db_name.length(), db_name.ptr(),
@@ -3514,6 +3551,12 @@ int ObAlterTableResolver::resolve_retry_ai_column(const ParseNode &node)
                                ai_column->get_column_name(),
                                status_column->get_column_name_str().length(),
                                status_column->get_column_name()))) {
+    } else if (OB_NOT_NULL(gen_column)
+               && OB_FAIL(sql.append_fmt(", `%.*s` = `%.*s` + 1",
+                                         gen_column->get_column_name_str().length(),
+                                         gen_column->get_column_name(),
+                                         gen_column->get_column_name_str().length(),
+                                         gen_column->get_column_name()))) {
     } else if (OB_NOT_NULL(where_node)) {
       const ParseNode *condition_node = where_node->num_child_ > 0
                                             ? where_node->children_[0] : NULL;
@@ -3539,6 +3582,46 @@ int ObAlterTableResolver::resolve_retry_ai_column(const ParseNode &node)
       int64_t affected_rows = 0;
       if (OB_FAIL(GCTX.sql_proxy_->write(sql.ptr(), affected_rows))) {
         LOG_WARN("retry ai column failed", K(ret), K(sql));
+      }
+    }
+    // Re-enqueue generation tasks for the rows the retry just invalidated.
+    if (OB_SUCC(ret)) {
+      static int64_t retry_request_id = 0;
+      const int64_t request_id = ATOMIC_AAF(&retry_request_id, 1);
+      ObSqlString pk_expr;
+      ObString first_rowkey_name;
+      for (ObTableSchema::const_column_iterator iter = table_schema_->column_begin();
+           iter != table_schema_->column_end(); ++iter) {
+        const ObColumnSchemaV2 *column = *iter;
+        if (OB_NOT_NULL(column)
+            && column->is_rowkey_column() && first_rowkey_name.empty()) {
+          first_rowkey_name = column->get_column_name_str();
+        }
+      }
+      if (first_rowkey_name.empty()) {
+        ret = OB_ERR_UNEXPECTED;
+        LOG_WARN("no visible rowkey column for ai retry sweep", K(ret));
+      } else if (OB_FAIL(share::build_ai_column_pk_expr(*table_schema_, pk_expr))) {
+        LOG_WARN("failed to build pk expr for ai retry", K(ret));
+      } else {
+        ObSqlString insert_sql;
+        ObSqlString delete_sql;
+        int64_t affected_rows = 0;
+        if (OB_FAIL(share::build_ai_column_task_sweep_insert_sql(
+                db_name, table_name, table_schema_->get_table_id(),
+                ai_column->get_column_id(), status_column->get_column_name_str(),
+                pk_expr.string(), request_id, insert_sql))) {
+          LOG_WARN("failed to build ai retry sweep insert", K(ret));
+        } else if (OB_FAIL(GCTX.sql_proxy_->write(insert_sql.ptr(), affected_rows))) {
+          LOG_WARN("failed to run ai retry task sweep", K(ret), K(insert_sql));
+        } else if (OB_FAIL(share::build_ai_column_task_sweep_delete_sql(
+                db_name, table_name, table_schema_->get_table_id(),
+                ai_column->get_column_id(), first_rowkey_name,
+                pk_expr.string(), delete_sql))) {
+          LOG_WARN("failed to build ai retry sweep delete", K(ret));
+        } else if (OB_FAIL(GCTX.sql_proxy_->write(delete_sql.ptr(), affected_rows))) {
+          LOG_WARN("failed to run ai retry task cleanup", K(ret), K(delete_sql));
+        }
       }
     }
   }

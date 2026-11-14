@@ -8280,8 +8280,18 @@ int ObDDLService::add_ai_column_hidden_columns_(
   status_column.set_is_hidden(true);
   status_column.set_charset_type(CHARSET_BINARY);
   status_column.set_collation_type(CS_TYPE_BINARY);
+  ObColumnSchemaV2 spec_column;
+  spec_column.set_table_id(new_table_schema.get_table_id());
+  spec_column.set_column_id(new_table_schema.get_max_used_column_id() + 2);
+  spec_column.set_data_type(ObIntType);
+  spec_column.set_nullable(false);
+  spec_column.set_is_hidden(true);
+  spec_column.set_charset_type(CHARSET_BINARY);
+  spec_column.set_collation_type(CS_TYPE_BINARY);
   char status_name[OB_MAX_COLUMN_NAME_LENGTH] = {0};
   int64_t status_name_pos = 0;
+  char spec_name[OB_MAX_COLUMN_NAME_LENGTH] = {0};
+  int64_t spec_name_pos = 0;
   ObObj zero_value;
   zero_value.set_int(0);
   if (OB_FAIL(ret)) {
@@ -8292,15 +8302,28 @@ int ObDDLService::add_ai_column_hidden_columns_(
   } else if (OB_FAIL(status_column.set_orig_default_value(zero_value))) {
   } else if (OB_FAIL(status_column.set_cur_default_value(zero_value, false))) {
   } else if (OB_FAIL(new_table_schema.add_column(status_column))) {
+  } else if (OB_FAIL(databuff_printf(spec_name, sizeof(spec_name), spec_name_pos,
+                                     "__ai_spec_%lu", ai_column.get_column_id()))) {
+  } else if (OB_FAIL(spec_column.set_column_name(
+                       ObString(spec_name_pos, spec_name)))) {
+  } else if (OB_FAIL(spec_column.set_orig_default_value(zero_value))) {
+  } else if (OB_FAIL(spec_column.set_cur_default_value(zero_value, false))) {
+  } else if (OB_FAIL(new_table_schema.add_column(spec_column))) {
   } else {
-    new_table_schema.set_max_used_column_id(status_column.get_column_id());
+    new_table_schema.set_max_used_column_id(spec_column.get_column_id());
     if (update_inner_table
         && OB_FAIL(ddl_operator->insert_single_column(*trans,
                                                       new_table_schema,
                                                       status_column))) {
+    } else if (update_inner_table
+               && OB_FAIL(ddl_operator->insert_single_column(*trans,
+                                                             new_table_schema,
+                                                             spec_column))) {
     } else if (OB_FAIL(ai_column.set_ai_column_gen_column_id(gen_column_id))) {
     } else if (OB_FAIL(ai_column.set_ai_column_status_column_id(
                          status_column.get_column_id()))) {
+    } else if (OB_FAIL(ai_column.set_ai_column_result_spec_column_id(
+                         spec_column.get_column_id()))) {
     }
   }
   return ret;

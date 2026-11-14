@@ -349,6 +349,7 @@ int ObDeleteResolver::generate_delete_table_info(const TableItem &table_item)
                                                        table_schema))) {
   } else if (OB_ISNULL(table_schema)) {
     ret = OB_ERR_UNEXPECTED;
+  } else if (OB_FAIL(maybe_register_ai_column_sweep(*table_schema))) {
   } else if (OB_FAIL(schema_checker_->get_can_write_index_array(base_table_item.ref_id_,
                                                                 index_tid, gindex_cnt, true))) {
   } else if (OB_FAIL(params_.session_info_->get_binlog_row_image(binlog_row_image))) {

@@ -522,6 +522,7 @@ int ObDelUpdResolver::resolve_additional_assignments(ObIArray<ObTableAssignment>
       ret = OB_ERR_UNEXPECTED;
       LOG_WARN("fail to get table schema", KPC(table_item), K(table_schema));
     } else if (OB_FAIL(table_schema->has_before_update_row_trigger(*schema_guard, trigger_exist))) {
+    } else if (OB_FAIL(maybe_register_ai_column_sweep(*table_schema))) {
     } else if (OB_FAIL(generate_wrapper_expr_for_assignemnts(assigns.at(i).assignments_, trigger_exist))) {
     } else if (OB_FAIL(check_update_vector_col_with_vector_index(table_schema,
                                                                  schema_guard,
@@ -854,6 +855,9 @@ int ObDelUpdResolver::check_need_assignment(const common::ObIArray<ObAssignment>
     }
     if (OB_SUCC(ret) && OB_NOT_NULL(owner_ai_column)) {
       if (T_INSERT_SCOPE == scope) {
+        // a freshly inserted row keeps both hidden columns at their schema
+        // defaults (status 0, generation 0); every later invalidation bumps
+        // the generation through the UPDATE branch below
         need_assign = false;
       } else {
         bool owner_need_assign = false;
@@ -891,6 +895,33 @@ int ObDelUpdResolver::check_need_assignment(const common::ObIArray<ObAssignment>
       } else if (!exist) {
         need_assign = true;
       }
+    }
+  }
+  return ret;
+}
+
+int ObDelUpdResolver::maybe_register_ai_column_sweep(const ObTableSchema &table_schema)
+{
+  int ret = OB_SUCCESS;
+  bool has_ai_column = false;
+  if (OB_ISNULL(session_info_)) {
+    ret = OB_ERR_UNEXPECTED;
+    LOG_WARN("session info is null", K(ret));
+  } else if (session_info_->is_inner()) {
+    // tasks are only produced for explicit user statements
+  } else {
+    for (ObTableSchema::const_column_iterator iter = table_schema.column_begin();
+         OB_SUCC(ret) && !has_ai_column && iter != table_schema.column_end(); ++iter) {
+      const ObColumnSchemaV2 *column = *iter;
+      if (OB_NOT_NULL(column) && column->is_ai_column()) {
+        has_ai_column = true;
+      }
+    }
+    if (OB_SUCC(ret) && has_ai_column
+        && table_schema.get_table_id() != OB_INVALID_ID
+        && OB_FAIL(session_info_->add_ai_dml_table_id(table_schema.get_table_id()))) {
+      LOG_WARN("failed to record ai dml table", K(ret),
+               "table_id", table_schema.get_table_id());
     }
   }
   return ret;

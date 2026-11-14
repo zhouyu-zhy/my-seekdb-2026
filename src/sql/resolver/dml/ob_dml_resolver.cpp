@@ -27,6 +27,7 @@
 #include "sql/optimizer/ob_optimizer_util.h"
 #include "sql/resolver/dml/ob_default_value_utils.h"
 #include "share/schema/ob_part_mgr_util.h"
+#include "share/schema/ob_ai_column_common.h"
 #include "sql/pl/ob_pl_package.h"
 #include "sql/optimizer/ob_opt_est_utils.h"
 #include "sql/rewrite/ob_transform_utils.h"
@@ -1873,8 +1874,9 @@ int ObDMLResolver::check_ai_column_strict_read(
         } else {
           int tmp_ret = res.get_result()->next();
           if (OB_SUCCESS == tmp_ret) {
-            ret = OB_NOT_SUPPORTED;
-            LOG_USER_ERROR(OB_NOT_SUPPORTED, "ai column is not ready in strict read mode");
+            ret = OB_ERR_AI_COLUMN_UNFINISHED_TASKS;
+            LOG_USER_ERROR(OB_ERR_AI_COLUMN_UNFINISHED_TASKS,
+                           table_schema.get_table_id(), ai_column.get_column_id());
           } else if (OB_ITER_END == tmp_ret) {
             ret = OB_SUCCESS;
           } else {
@@ -1926,7 +1928,15 @@ int ObDMLResolver::resolve_basic_column_item(const TableItem &table_item,
     uint64_t tid = table_item.ref_id_;
     if (!include_hidden) {
       if (!ObCharset::case_insensitive_equal(column_name, OB_HIDDEN_PK_INCREMENT_COLUMN_NAME)) {
-        //do nothing
+        if ((session_info_->get_ai_internal_sql() || session_info_->is_inner())
+            && share::is_ai_column_bookkeeping_name(column_name)) {
+          // Two kinds of kernel-generated statement may name the hidden AI
+          // bookkeeping columns: the task sweep, which runs on the user session
+          // so that its task rows share the user transaction, and the
+          // background worker, which runs on its own inner session.  Ordinary
+          // user statements get neither flag and keep seeing "unknown column".
+          include_hidden = true;
+        }
       } else if (current_scope_ == T_UPDATE_SCOPE || current_scope_ == T_INSERT_SCOPE) {
         //do nothing include is false
       } else if (ObResolverUtils::is_restore_user(*session_info_)

@@ -401,6 +401,10 @@ int ObInsertResolver::resolve_insert_field(const ParseNode &insert_into, TableIt
     OZ(schema_checker_->get_table_schema(
                                          table_item->get_base_table_item().ref_id_,
                                          table_schema));
+    if (OB_SUCC(ret) && OB_NOT_NULL(table_schema)
+        && OB_FAIL(maybe_register_ai_column_sweep(*table_schema))) {
+      LOG_WARN("failed to record ai column sweep", K(ret));
+    }
   }
 
   OZ(remove_dup_dep_cols_for_heap_table(insert_stmt->get_insert_table_info().part_generated_col_dep_cols_,

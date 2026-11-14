@@ -50,7 +50,6 @@ public:
 private:
   void run_();
   int process_once_();
-  int process_table_(const share::schema::ObTableSchema &table_schema);
 
 private:
   bool is_inited_;

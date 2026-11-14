@@ -16,6 +16,7 @@
 
 #define USING_LOG_PREFIX RS
 #include "rootserver/parallel_ddl/ob_create_table_helper.h"
+#include "rootserver/ob_ddl_operator.h"
 #include "rootserver/ob_index_builder.h"
 #include "rootserver/ob_lob_meta_builder.h"
 #include "rootserver/ob_lob_piece_builder.h"
@@ -863,6 +864,17 @@ int ObCreateTableHelper::operate_schemas_() {
   if (OB_FAIL(check_inner_stat_())) {
   } else if (OB_FAIL(inner_create_table_(&arg_.ddl_stmt_str_,
                                          replace_mock_fk_parent_table_id_))) {
+  } else {
+    // CREATE TABLE is served by the parallel-DDL framework, which never runs
+    // the legacy ObDDLOperator::create_table() hook, so publish the AI column
+    // metadata here while the schema rows are still in the same transaction.
+    for (int64_t i = 0; OB_SUCC(ret) && i < new_tables_.count(); i++) {
+      if (OB_FAIL(ObDDLOperator::sync_ai_column_meta_rows(
+              new_tables_.at(i), get_trans_()))) {
+        LOG_WARN("failed to sync ai column meta rows", K(ret), "table_id",
+                 new_tables_.at(i).get_table_id());
+      }
+    }
   }
   return ret;
 }

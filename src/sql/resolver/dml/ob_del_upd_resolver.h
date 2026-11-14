@@ -87,6 +87,8 @@ protected:
                             const ObStmtScope scope,
                             bool &need_assign);
 
+  int maybe_register_ai_column_sweep(const share::schema::ObTableSchema &table_schema);
+
   int set_base_table_for_updatable_view(TableItem &table_item,
                                         const ObColumnRefRawExpr &col_ref,
                                         const bool log_error = true);

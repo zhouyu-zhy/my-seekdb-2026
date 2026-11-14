@@ -5486,7 +5486,12 @@ int ObStaticEngineCG::generate_spec(ObLogSelectInto &op, ObSelectIntoSpec &spec,
       spec.cs_type_ = op.get_cs_type();
       spec.parallel_ = op.get_parallel();
       spec.is_overwrite_ = op.get_is_overwrite();
-      spec.plan_->need_drive_dml_query_ = true;
+      spec.has_header_ = op.get_has_header();
+      if (OB_FAIL(ob_write_string(alloc, op.get_header_str(), spec.header_str_))) {
+        LOG_WARN("failed to copy csv header string", K(ret));
+      } else {
+        spec.plan_->need_drive_dml_query_ = true;
+      }
     }
   }
   return ret;

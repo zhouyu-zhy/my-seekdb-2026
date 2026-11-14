@@ -1986,7 +1986,19 @@ int ObRawExprResolverImpl::process_system_variable_node(const ParseNode *node, O
   } else {
     ObString str;
     str.assign_ptr(const_cast<char *>(node->str_value_), static_cast<int32_t>(node->str_len_));
-    if (OB_FAIL(ObRawExprUtils::build_get_sys_var(ctx_.expr_factory_, str,
+    if (0 == str.case_compare("ai_column_strict_read")
+        && OB_NOT_NULL(ctx_.session_info_)) {
+      // ai_column_strict_read is a session-local switch handled outside the
+      // sys variable schema; reading it yields the current boolean as 0/1.
+      ObConstRawExpr *val_expr = NULL;
+      if (OB_FAIL(ObRawExprUtils::build_const_int_expr(
+              ctx_.expr_factory_, ObIntType,
+              ctx_.session_info_->get_ai_column_strict_read() ? 1 : 0, val_expr))) {
+        LOG_WARN("failed to build ai_column_strict_read const expr", K(ret));
+      } else if (OB_NOT_NULL(val_expr)) {
+        expr = val_expr;
+      }
+    } else if (OB_FAIL(ObRawExprUtils::build_get_sys_var(ctx_.expr_factory_, str,
                                                   static_cast<sql::ObSetVar::SetScopeType>(node->value_),
                                                   expr))) {
     } else {

@@ -490,6 +490,26 @@ public:
   int64_t get_found_rows() const { return found_rows_; }
   void set_affected_rows(const int64_t count) { affected_rows_ = count; }
   int64_t get_affected_rows() const { return affected_rows_; }
+
+  // Tables touched by user DML that own AI columns; the statement executor
+  // drains this list after each DML to enqueue asynchronous AI column tasks.
+  int add_ai_dml_table_id(uint64_t table_id)
+  {
+    bool found = false;
+    for (int64_t i = 0; !found && i < ai_dml_table_ids_.count(); ++i) {
+      found = (ai_dml_table_ids_.at(i) == table_id);
+    }
+    return found ? common::OB_SUCCESS : ai_dml_table_ids_.push_back(table_id);
+  }
+  common::ObIArray<uint64_t> &get_ai_dml_table_ids() { return ai_dml_table_ids_; }
+  void reset_ai_dml_table_ids() { ai_dml_table_ids_.reset(); }
+
+  // Set while the kernel runs its own AI column maintenance statement (the
+  // task sweep) on behalf of a user transaction.  Those statements address
+  // the hidden bookkeeping columns of the AI table, which ordinary user SQL
+  // must not see; no user-written statement can turn this on.
+  inline void set_ai_internal_sql(bool value) { ai_internal_sql_ = value; }
+  inline bool get_ai_internal_sql() const { return ai_internal_sql_; }
   bool has_user_super_privilege() const;
   bool has_user_process_privilege() const;
   int check_read_only_privilege(const bool read_only,
@@ -912,6 +932,7 @@ private:
 //  int64_t has_write_stmt_in_trans_;
   bool inner_flag_; // whether it is a virtual session for an internal request
   bool ai_column_strict_read_;
+  bool ai_internal_sql_; // kernel-generated AI column statement is executing
   // After version 2.2, this variable is no longer used
   bool is_max_availability_mode_;
   typedef common::hash::ObHashMap<ObPsStmtId, ObPsSessionInfo *,
@@ -977,6 +998,7 @@ private:
   ObSessionStat session_stat_;
 
   common::ObSEArray<uint64_t, 8> enable_role_array_;
+  common::ObSEArray<uint64_t, 4> ai_dml_table_ids_;
   ObCachedSchemaGuardInfo cached_schema_guard_info_;
   bool in_definer_named_proc_;
   uint64_t priv_user_id_;

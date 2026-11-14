@@ -16,6 +16,7 @@
 
 #define USING_LOG_PREFIX RS
 #include "rootserver/parallel_ddl/ob_drop_table_helper.h"
+#include "rootserver/ob_ddl_operator.h"
 
 #include "rootserver/ob_snapshot_info_manager.h"
 #include "rootserver/ob_tablet_drop.h"
@@ -425,6 +426,16 @@ int ObDropTableHelper::operate_schemas_()
           if (OB_FAIL(drop_table_(*table_schema, &ddl_stmt_str))) {
           }
         }
+      }
+
+      // A table that leaves the database for good also loses its AI column
+      // metadata and any task still queued for it; a table parked in the
+      // recyclebin keeps both so FLASHBACK TABLE can restore them.
+      if (!is_to_recyclebin_(*table_schema)
+          && FAILEDx(ObDDLOperator::remove_ai_column_meta_rows(
+                 *table_schema, get_trans_()))) {
+        LOG_WARN("failed to remove ai column meta rows", K(ret),
+                 "table_id", table_schema->get_table_id());
       }
 
       if (FAILEDx(deal_with_mock_fk_parent_tables_(i))) {

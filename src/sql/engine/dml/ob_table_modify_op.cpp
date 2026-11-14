@@ -19,6 +19,7 @@
 #include "ob_table_modify_op.h"
 #include "share/ob_autoincrement_service.h"
 #include "query/session/ob_inner_sql_connection_access.h"
+#include "share/schema/ob_ai_column_common.h"
 #include "sql/engine/ob_physical_plan.h"
 #include "sql/engine/dml/ob_dml_service.h"
 
@@ -791,6 +792,259 @@ int ObTableModifyOp::inner_switch_iterator()
   return ret;
 }
 
+// Grants the session's hidden AI bookkeeping columns to the statements issued
+// while the guard is alive.  The sweep has to run on the user session to keep
+// its task rows inside the user transaction, so it borrows the inner-session
+// privilege of naming those columns for exactly the duration of its own SQL.
+class ObAiInternalSqlScope
+{
+public:
+  explicit ObAiInternalSqlScope(ObSQLSessionInfo *session)
+    : session_(session), saved_(false)
+  {
+    if (OB_NOT_NULL(session_)) {
+      saved_ = session_->get_ai_internal_sql();
+      session_->set_ai_internal_sql(true);
+    }
+  }
+  ~ObAiInternalSqlScope()
+  {
+    if (OB_NOT_NULL(session_)) {
+      session_->set_ai_internal_sql(saved_);
+    }
+  }
+private:
+  ObSQLSessionInfo *session_;
+  bool saved_;
+  DISALLOW_COPY_AND_ASSIGN(ObAiInternalSqlScope);
+};
+
+// A foreign key cascade is the engine's model for "a statement issued from
+// inside another statement".  Borrowing its marker makes the session classify
+// the sweep INSERT/DELETE as nested SQL, which is what keeps the statement
+// bookkeeping of the enclosing user DML (and its transaction) intact.
+class ObAiNestedSqlScope
+{
+public:
+  explicit ObAiNestedSqlScope(ObExecContext &ctx)
+    : ctx_(ctx), saved_(ctx.get_das_ctx().is_fk_cascading_)
+  {
+    ctx_.get_das_ctx().is_fk_cascading_ = true;
+  }
+  ~ObAiNestedSqlScope()
+  {
+    ctx_.get_das_ctx().is_fk_cascading_ = saved_;
+  }
+private:
+  ObExecContext &ctx_;
+  bool saved_;
+  DISALLOW_COPY_AND_ASSIGN(ObAiNestedSqlScope);
+};
+
+static bool table_has_ai_column(const ObTableSchema &table_schema)
+{
+  bool found = false;
+  for (ObTableSchema::const_column_iterator iter = table_schema.column_begin();
+       !found && iter != table_schema.column_end(); ++iter) {
+    const ObColumnSchemaV2 *column = *iter;
+    found = (OB_NOT_NULL(column) && column->is_ai_column());
+  }
+  return found;
+}
+
+// Which tables should this statement enqueue AI work for?
+// The resolver records the tables it resolved, which also covers multi-table
+// DML, but a plan-cache hit never runs the resolver again.  The DML operator
+// itself knows the table it writes, so fall back to that when the recorded
+// list is empty.
+int collect_ai_sweep_table_ids(ObExecContext &ctx,
+                               const ObTableModifySpec &spec,
+                               ObSqlCtx &sql_ctx,
+                               ObIArray<uint64_t> &table_ids)
+{
+  int ret = OB_SUCCESS;
+  ObSQLSessionInfo *session = ctx.get_my_session();
+  share::schema::ObSchemaGetterGuard *schema_guard = sql_ctx.schema_guard_;
+  if (OB_ISNULL(session) || OB_ISNULL(schema_guard)) {
+    ret = OB_ERR_UNEXPECTED;
+    LOG_WARN("missing session or schema guard for ai column sweep", K(ret));
+  } else if (OB_FAIL(table_ids.assign(session->get_ai_dml_table_ids()))) {
+    LOG_WARN("failed to copy ai dml table ids", K(ret));
+  } else if (!table_ids.empty()) {
+    session->reset_ai_dml_table_ids();
+  } else {
+    ObTableID loc_id = OB_INVALID_ID;
+    ObTableID ref_id = OB_INVALID_ID;
+    const int spec_ret = spec.get_single_table_loc_id(loc_id, ref_id);
+    if (OB_SUCCESS != spec_ret) {
+      // operators that do not expose a single target table keep relying on the
+      // resolver registration alone
+      LOG_TRACE("no single dml table for ai column sweep", K(spec_ret));
+    } else {
+      const uint64_t ids[2] = {static_cast<uint64_t>(ref_id), static_cast<uint64_t>(loc_id)};
+      for (int64_t i = 0; OB_SUCC(ret) && i < 2; ++i) {
+        const ObTableSchema *table_schema = NULL;
+        bool known = false;
+        if (OB_INVALID_ID == ids[i]) {
+          // the operator did not fill in this id
+        } else if (OB_FAIL(schema_guard->get_table_schema(ids[i], table_schema))) {
+          LOG_WARN("failed to get table schema for ai column sweep", K(ret), K(ids[i]));
+        } else if (OB_ISNULL(table_schema) || !table_has_ai_column(*table_schema)) {
+          // an index table or an ordinary table: no AI work to queue
+        } else {
+          for (int64_t j = 0; !known && j < table_ids.count(); ++j) {
+            known = (table_ids.at(j) == ids[i]);
+          }
+          if (!known && OB_FAIL(table_ids.push_back(ids[i]))) {
+            LOG_WARN("failed to record ai sweep table", K(ret), K(ids[i]));
+          }
+        }
+      }
+    }
+  }
+  return ret;
+}
+
+int ObTableModifyOp::ai_column_task_sweep()
+{
+  int ret = OB_SUCCESS;
+  static int64_t ai_column_request_id = 0;
+  ObSQLSessionInfo *session = ctx_.get_my_session();
+  ObSqlCtx *sql_ctx = ctx_.get_sql_ctx();
+  if (OB_ISNULL(session) || session->is_inner()
+      || OB_ISNULL(sql_ctx) || OB_ISNULL(sql_ctx->schema_guard_)) {
+    // background and replayed statements never enqueue AI column work
+  } else {
+    ObSEArray<uint64_t, 4> table_ids;
+    if (OB_FAIL(collect_ai_sweep_table_ids(ctx_, MY_SPEC, *sql_ctx, table_ids))) {
+      LOG_WARN("failed to resolve ai column sweep tables", K(ret));
+    } else if (table_ids.empty()) {
+      // this statement did not touch an AI column
+    } else {
+      const int64_t request_id = ATOMIC_AAF(&ai_column_request_id, 1);
+      // Reuse the statement's own nested-SQL plumbing (the one foreign keys
+      // use): the connection is bound to the user session, so the task rows
+      // land in the user transaction and a rollback takes them with it.
+      const ObAiInternalSqlScope internal_sql_scope(session);
+      const ObAiNestedSqlScope nested_sql_scope(ctx_);
+      if (OB_FAIL(open_inner_conn())) {
+        LOG_WARN("failed to open inner conn for ai column sweep", K(ret));
+      }
+      for (int64_t i = 0; OB_SUCC(ret) && i < table_ids.count(); ++i) {
+        const ObTableSchema *table_schema = NULL;
+        const ObDatabaseSchema *db_schema = NULL;
+        ObString db_name;
+        if (OB_FAIL(sql_ctx->schema_guard_->get_table_schema(table_ids.at(i),
+                                                             table_schema))) {
+          LOG_WARN("failed to get table schema", K(ret), "table_id", table_ids.at(i));
+        } else if (OB_ISNULL(table_schema)) {
+          // the table was dropped in this transaction; drop_table already
+          // removed its metadata and task rows
+        } else if (OB_FAIL(sql_ctx->schema_guard_->get_database_schema(
+                       table_schema->get_database_id(), db_schema))
+                   || OB_ISNULL(db_schema)) {
+          LOG_WARN("failed to get database schema", K(ret),
+                   "database_id", table_schema->get_database_id());
+        } else if (FALSE_IT(db_name = db_schema->get_database_name_str())) {
+        } else {
+          bool has_ai_column = false;
+          ObString first_rowkey_name;
+          for (ObTableSchema::const_column_iterator iter = table_schema->column_begin();
+               iter != table_schema->column_end(); ++iter) {
+            const ObColumnSchemaV2 *column = *iter;
+            if (OB_NOT_NULL(column)) {
+              if (column->is_ai_column()) {
+                has_ai_column = true;
+              } else if (column->is_rowkey_column()
+                         && first_rowkey_name.empty()) {
+                first_rowkey_name = column->get_column_name_str();
+              }
+            }
+          }
+          if (!has_ai_column || first_rowkey_name.empty()) {
+            // nothing to sweep
+          } else {
+            ObSqlString pk_expr;
+            if (OB_FAIL(share::build_ai_column_pk_expr(*table_schema, pk_expr))) {
+              LOG_WARN("failed to build pk expr", K(ret));
+            }
+            for (ObTableSchema::const_column_iterator iter = table_schema->column_begin();
+                 OB_SUCC(ret) && iter != table_schema->column_end(); ++iter) {
+              const ObColumnSchemaV2 *column = *iter;
+              if (OB_NOT_NULL(column) && column->is_ai_column()) {
+                const uint64_t status_col_id = column->get_ai_column_status_column_id();
+                const ObColumnSchemaV2 *status_column = (OB_INVALID_ID == status_col_id)
+                    ? NULL : table_schema->get_column_schema(status_col_id);
+                if (OB_ISNULL(status_column)) {
+                  ret = OB_ERR_UNEXPECTED;
+                  LOG_WARN("ai column without hidden status column", K(ret),
+                           "column_id", column->get_column_id());
+                } else {
+                  ObSqlString insert_sql;
+                  ObSqlString delete_sql;
+                  if (OB_FAIL(share::build_ai_column_task_sweep_insert_sql(
+                          db_name, table_schema->get_table_name_str(),
+                          table_schema->get_table_id(), column->get_column_id(),
+                          status_column->get_column_name_str(), pk_expr.string(),
+                          request_id, insert_sql))) {
+                    LOG_WARN("failed to build sweep insert", K(ret));
+                  } else if (OB_FAIL(execute_ai_column_sweep_stmt(insert_sql))) {
+                    LOG_WARN("failed to sweep ai tasks in", K(ret), K(insert_sql));
+                  } else if (OB_FAIL(share::build_ai_column_task_sweep_delete_sql(
+                          db_name, table_schema->get_table_name_str(),
+                          table_schema->get_table_id(), column->get_column_id(),
+                          first_rowkey_name, pk_expr.string(), delete_sql))) {
+                    LOG_WARN("failed to build sweep delete", K(ret));
+                  } else if (OB_FAIL(execute_ai_column_sweep_stmt(delete_sql))) {
+                    LOG_WARN("failed to sweep ai tasks out", K(ret), K(delete_sql));
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+      const int close_ret = close_inner_conn();
+      if (OB_SUCCESS != close_ret) {
+        LOG_WARN("failed to close inner conn after ai column sweep", K(close_ret));
+        if (OB_SUCC(ret)) {
+          ret = close_ret;
+        }
+      }
+    }
+  }
+  return ret;
+}
+
+// One sweep statement, run the way a foreign key cascade runs: the nested
+// session values are saved around it so the outer statement keeps its own
+// transaction, schema and table-state when it resumes.
+int ObTableModifyOp::execute_ai_column_sweep_stmt(const common::ObSqlString &sql)
+{
+  int ret = OB_SUCCESS;
+  int64_t affected_rows = 0;
+  if (OB_FAIL(begin_nested_session(false))) {
+    LOG_WARN("failed to begin nested session for ai sweep", K(ret));
+  } else {
+    if (OB_ISNULL(inner_conn_)) {
+      ret = OB_NOT_INIT;
+    } else if (OB_FAIL(inner_conn_->execute_write(sql.ptr(), affected_rows))) {
+      LOG_WARN("failed to execute ai sweep statement", K(ret), K(sql));
+    }
+    // Both sweep statements are per-AI-column, so a zero here explains any
+    // missing or leftover task row without further digging.
+    LOG_INFO("ai column task sweep statement", K(ret), K(affected_rows), "sql_len", sql.length());
+    const int end_ret = end_nested_session();
+    if (OB_SUCCESS != end_ret) {
+      LOG_WARN("failed to end nested session for ai sweep", K(end_ret));
+      if (OB_SUCCESS == ret) {
+        ret = end_ret;
+      }
+    }
+  }
+  return ret;
+}
+
 int ObTableModifyOp::inner_close()
 {
   int ret = OB_SUCCESS;
@@ -808,6 +1062,12 @@ int ObTableModifyOp::inner_close()
     if (OB_FAIL(dml_rtctx_.das_ref_.close_all_task())) {
     } else {
       dml_rtctx_.das_ref_.reset();
+    }
+  }
+  if (OB_SUCC(ret)) {
+    int tmp_ret = OB_SUCCESS;
+    if (OB_TMP_FAIL(ai_column_task_sweep())) {
+      LOG_WARN("failed to sweep ai column tasks, ignored", K(tmp_ret));
     }
   }
   dml_modify_rows_.clear();

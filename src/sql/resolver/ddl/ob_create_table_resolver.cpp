@@ -769,20 +769,40 @@ int ObCreateTableResolver::resolve_table_elements(const ParseNode *node,
             status_col.set_is_hidden(true);
             status_col.set_charset_type(CHARSET_BINARY);
             status_col.set_collation_type(CS_TYPE_BINARY);
+            ObColumnSchemaV2 spec_col;
+            spec_col.set_table_id(table_schema.get_table_id());
+            spec_col.set_column_id(gen_column_id());
+            spec_col.set_data_type(ObIntType);
+            spec_col.set_nullable(false);
+            spec_col.set_is_hidden(true);
+            spec_col.set_charset_type(CHARSET_BINARY);
+            spec_col.set_collation_type(CS_TYPE_BINARY);
             char name_buf[OB_MAX_COLUMN_NAME_LENGTH] = {0};
             int64_t name_pos = 0;
+            char spec_name_buf[OB_MAX_COLUMN_NAME_LENGTH] = {0};
+            int64_t spec_name_pos = 0;
             if (OB_FAIL(databuff_printf(name_buf, OB_MAX_COLUMN_NAME_LENGTH, name_pos,
                                         "__ai_status_%lu", column.get_column_id()))) {
             } else if (OB_FAIL(status_col.set_column_name(ObString(
                            static_cast<int32_t>(name_pos), name_buf)))) {
+            } else if (OB_FAIL(databuff_printf(spec_name_buf, OB_MAX_COLUMN_NAME_LENGTH,
+                                               spec_name_pos, "__ai_spec_%lu",
+                                               column.get_column_id()))) {
+            } else if (OB_FAIL(spec_col.set_column_name(ObString(
+                           static_cast<int32_t>(spec_name_pos), spec_name_buf)))) {
             } else {
               ObObj default_value;
               default_value.set_int(0);
               if (OB_FAIL(status_col.set_orig_default_value(default_value))) {
               } else if (OB_FAIL(status_col.set_cur_default_value(default_value, false))) {
+              } else if (OB_FAIL(spec_col.set_orig_default_value(default_value))) {
+              } else if (OB_FAIL(spec_col.set_cur_default_value(default_value, false))) {
               } else if (OB_FAIL(column.set_ai_column_status_column_id(status_col.get_column_id()))) {
               } else if (OB_FAIL(column.set_ai_column_gen_column_id(ai_gen_column_id))) {
+              } else if (OB_FAIL(column.set_ai_column_result_spec_column_id(
+                             spec_col.get_column_id()))) {
               } else if (OB_FAIL(ai_hidden_cols.push_back(status_col))) {
+              } else if (OB_FAIL(ai_hidden_cols.push_back(spec_col))) {
               }
             }
           }
@@ -981,6 +1001,10 @@ int ObCreateTableResolver::resolve_table_elements(const ParseNode *node,
                 LOG_USER_ERROR(OB_ERR_BAD_FIELD_ERROR, dep_name.length(), dep_name.ptr(),
                                table_schema.get_table_name_str().length(),
                                table_schema.get_table_name_str().ptr());
+              } else if (dep_column->is_ai_column()) {
+                // depending on another AI column is not supported yet; keep the
+                // default OB_NOT_SUPPORTED message without a user error template.
+                ret = OB_NOT_SUPPORTED;
               } else if (OB_FAIL(ai_column->add_cascaded_column_id(dep_column->get_column_id()))) {
               }
             }

@@ -190,6 +190,13 @@ public:
   int insert_single_column(common::ObMySQLTransaction &trans,
                            const share::schema::ObTableSchema &new_table_schema,
                            share::schema::ObColumnSchemaV2 &new_column) override;
+  // (Re)writes oceanbase.__all_ai_column rows for every AI column currently
+  // declared on the table; also refreshes task cleanup on drop.  Exposed
+  // statically so the parallel-DDL create/drop helpers can reuse it.
+  static int sync_ai_column_meta_rows(const share::schema::ObTableSchema &table_schema,
+                                      common::ObMySQLTransaction &trans);
+  static int remove_ai_column_meta_rows(const share::schema::ObTableSchema &table_schema,
+                                        common::ObMySQLTransaction &trans);
   int delete_single_column(common::ObMySQLTransaction &trans,
                            const int64_t new_schema_version,
                            share::schema::ObTableSchema &new_table_schema,

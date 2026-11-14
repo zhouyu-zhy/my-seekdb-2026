@@ -214,6 +214,7 @@ private:
   int64_t modify_constraint_times_;
   bool add_not_null_constraint_;
   int64_t add_column_cnt_;
+  bool retry_ai_column_executed_;
   DISALLOW_COPY_AND_ASSIGN(ObAlterTableResolver);
 };
 

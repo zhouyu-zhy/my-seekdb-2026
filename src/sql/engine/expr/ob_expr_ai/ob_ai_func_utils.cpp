@@ -1402,6 +1402,38 @@ int ObAIFuncModel::call_completion(ObString &prompt, ObJsonObject *config, ObStr
   return ret;
 }
 
+int ObAIFuncModel::call_completion(ObString &system_prompt, ObString &user_prompt,
+                                   ObJsonObject *config, ObString &result)
+{
+  int ret = OB_SUCCESS;
+  ObArray<ObString> headers;
+  ObJsonObject *body = nullptr;
+  ObJsonObject *response = nullptr;
+  ObIJsonBase *result_base = nullptr;
+  ObAIFuncIComplete *complete_provider = nullptr;
+  ObString result_str;
+  ObAIFuncClient client;
+  ObString unencrypted_access_key;
+  ObString request_model_name = get_request_model_name();
+  if (!is_completion_type()) {
+    ret = OB_INVALID_ARGUMENT;
+    LOG_USER_ERROR(OB_INVALID_ARGUMENT, "ai_complete, info type is not completion");
+  } else if (OB_FAIL(ObAIFuncUtils::get_complete_provider(*allocator_, endpoint_info_.get_provider(), complete_provider))) {
+  } else if (OB_FAIL(endpoint_info_.get_unencrypted_access_key(*allocator_, unencrypted_access_key))) {
+  } else if (OB_FAIL(complete_provider->get_header(*allocator_, unencrypted_access_key, headers))) {
+  } else if (OB_FAIL(complete_provider->get_body(*allocator_, request_model_name, system_prompt, user_prompt, config, body))) {
+  } else if (OB_FAIL(client.send_post(*allocator_, endpoint_info_.get_url(), headers, body, response))) {
+  } else if (OB_FAIL(complete_provider->parse_output(*allocator_, response, result_base))) {
+  } else if (OB_FAIL(ObAIFuncJsonUtils::print_json_to_str(*allocator_, result_base, result_str))) {
+  } else if (result_str.empty()) {
+    // the model service must not answer with an empty completion
+    ret = OB_INVALID_DATA;
+  } else {
+    result = result_str;
+  }
+  return ret;
+}
+
 int ObAIFuncModel::call_completion_vector(ObArray<ObString> &prompts, ObJsonObject *config, ObArray<ObString> &results)
 {
   int ret = OB_SUCCESS;

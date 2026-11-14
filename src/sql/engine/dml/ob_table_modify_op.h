@@ -18,6 +18,7 @@
 #define OCEANBASE_SQL_ENGINE_DML_OB_TABLE_MODIFY_OP_
 
 #include "sql/engine/ob_operator.h"
+#include "lib/string/ob_sql_string.h"
 #include "sql/engine/dml/ob_dml_ctx_define.h"
 #include "sql/session/ob_inner_sql_connection.h"
 #include "sql/engine/ob_exec_context.h"
@@ -296,6 +297,13 @@ protected:
                              int64_t delete_rows,
                              int64_t found_rows);
   int discharge_das_write_buffer();
+  // Enqueue/retire __all_ai_column_task rows for AI-column tables touched by
+  // this statement; runs on the session's own inner connection so the task
+  // rows share the user transaction.
+  int ai_column_task_sweep();
+  // Runs one sweep statement inside a nested session, the same protocol the
+  // foreign key cascades use, so the user statement's session state survives.
+  int execute_ai_column_sweep_stmt(const common::ObSqlString &sql);
   virtual void record_err_for_load_data(int err_ret, int row_num) { UNUSED(err_ret); UNUSED(row_num); }
 public:
   common::ObMySQLProxy *sql_proxy_;

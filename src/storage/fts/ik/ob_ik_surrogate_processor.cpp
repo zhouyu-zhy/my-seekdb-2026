@@ -1,3 +1,4 @@
+// [competition] ob_ik_surrogate_processor.cpp
 /*
  * Copyright (c) 2025 OceanBase.
  *

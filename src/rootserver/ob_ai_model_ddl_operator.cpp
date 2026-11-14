@@ -1,3 +1,4 @@
+// [competition] ob_ai_model_ddl_operator.cpp
 /*
  * Copyright (c) 2025 OceanBase.
  *

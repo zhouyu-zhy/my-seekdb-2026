@@ -1,3 +1,4 @@
+// [competition] ob_ai_model_priv_util.h
 /*
  * Copyright (c) 2025 OceanBase.
  *

@@ -1,3 +1,4 @@
+// [competition] fts_parse.h
 /*
  * Copyright (c) 2025 OceanBase.
  *

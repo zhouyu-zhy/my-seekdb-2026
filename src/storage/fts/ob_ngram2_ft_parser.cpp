@@ -1,3 +1,4 @@
+// [competition] ob_ngram2_ft_parser.cpp
 /*
  * Copyright (c) 2025 OceanBase.
  *

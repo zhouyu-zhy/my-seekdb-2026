@@ -1,3 +1,4 @@
+// [competition] ob_fts_doc_word_scan.h
 /*
  * Copyright (c) 2025 OceanBase.
  *

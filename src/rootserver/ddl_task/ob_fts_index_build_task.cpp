@@ -1,3 +1,4 @@
+// [competition] ob_fts_index_build_task.cpp
 /*
  * Copyright (c) 2025 OceanBase.
  *

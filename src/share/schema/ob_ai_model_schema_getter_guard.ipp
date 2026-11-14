@@ -1,3 +1,4 @@
+// [competition] ob_ai_model_schema_getter_guard.ipp
 /*
  * Copyright (c) 2025 OceanBase.
  *

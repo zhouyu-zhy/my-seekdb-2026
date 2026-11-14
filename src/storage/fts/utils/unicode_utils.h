@@ -1,3 +1,4 @@
+// [competition] unicode_utils.h
 /*
  * Copyright (c) 2025 OceanBase.
  *

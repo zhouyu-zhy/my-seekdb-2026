@@ -1,3 +1,4 @@
+// [competition] ob_ik_arbitrator.h
 /*
  * Copyright (c) 2025 OceanBase.
  *

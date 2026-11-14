@@ -1,3 +1,4 @@
+// [competition] ob_fts_struct.h
 /*
  * Copyright (c) 2025 OceanBase.
  *

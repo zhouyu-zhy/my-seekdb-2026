@@ -1,3 +1,4 @@
+// [competition] ob_ai_column_worker.cpp
 /*
  * Copyright (c) 2025 OceanBase.
  *

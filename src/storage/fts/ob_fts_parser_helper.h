@@ -1,3 +1,4 @@
+// [competition] ob_fts_parser_helper.h
 /*
  * Copyright (c) 2025 OceanBase.
  *

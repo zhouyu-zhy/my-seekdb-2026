@@ -1,3 +1,4 @@
+// [competition] ob_ai_model_resolver.h
 /*
  * Copyright (c) 2025 OceanBase.
  *

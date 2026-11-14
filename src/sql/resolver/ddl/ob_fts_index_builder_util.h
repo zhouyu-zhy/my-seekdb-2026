@@ -1,3 +1,4 @@
+// [competition] ob_fts_index_builder_util.h
 /*
  * Copyright (c) 2025 OceanBase.
  *

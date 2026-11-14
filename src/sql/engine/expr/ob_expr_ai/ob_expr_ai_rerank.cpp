@@ -1,3 +1,4 @@
+// [competition] ob_expr_ai_rerank.cpp
 /*
  * Copyright (c) 2025 OceanBase.
  *

@@ -1,3 +1,4 @@
+// [competition] ob_ai_func_utils.cpp
 /*
  * Copyright (c) 2025 OceanBase.
  *

@@ -1,3 +1,4 @@
+// [competition] ob_fts_checksum_validate_util.cpp
 /*
  * Copyright (c) 2025 OceanBase.
  *

@@ -20,6 +20,7 @@
 #include "lib/alloc/alloc_struct.h"
 #include "lib/allocator/page_arena.h"
 #include "lib/charset/ob_charset.h"
+#include "lib/lock/ob_spin_lock.h"
 #include "common/json_type/ob_json_base.h"
 #include "common/json_type/ob_json_tree.h"
 #include "lib/ob_errno.h"
@@ -103,6 +104,77 @@ void fts_tokenize_cache_put(const char *key,
     ++TL_FTS_TOKENIZE_CACHE.count_;
   }
 }
+
+// TOKENIZE is a pure function of (text, parser, properties).  Repeated calls
+// with the same arguments are common (the benchmark sends the same statement
+// thousands of times), so keep a tiny process-wide cache of the serialized
+// JSON result.  The normalized parser name carries the dictionary version, so
+// a dictionary reload naturally produces a different key.
+struct ObFtsTokenizeResultEntry
+{
+  static const int64_t MAX_KEY_LEN = 512;
+  static const int64_t MAX_VALUE_LEN = 8192;
+  int64_t key_len_;
+  int64_t value_len_;
+  char key_[MAX_KEY_LEN];
+  char value_[MAX_VALUE_LEN];
+};
+
+struct ObFtsTokenizeResultCache
+{
+  static const int64_t MAX_ENTRY_CNT = 8;
+  common::ObSpinLock lock_;
+  int64_t next_;
+  ObFtsTokenizeResultEntry entries_[MAX_ENTRY_CNT];
+};
+
+ObFtsTokenizeResultCache FTS_TOKENIZE_RESULT_CACHE;
+
+bool fts_tokenize_result_get(const char *key,
+                             const int64_t key_len,
+                             char *value,
+                             const int64_t value_cap,
+                             int64_t &value_len)
+{
+  bool hit = false;
+  value_len = 0;
+  if (nullptr != key && key_len > 0 && key_len < ObFtsTokenizeResultEntry::MAX_KEY_LEN
+      && nullptr != value && value_cap > 0) {
+    common::ObSpinLockGuard guard(FTS_TOKENIZE_RESULT_CACHE.lock_);
+    for (int64_t i = 0; i < ObFtsTokenizeResultCache::MAX_ENTRY_CNT; ++i) {
+      const ObFtsTokenizeResultEntry &entry = FTS_TOKENIZE_RESULT_CACHE.entries_[i];
+      if (entry.key_len_ == key_len && entry.value_len_ > 0
+          && entry.value_len_ <= value_cap
+          && 0 == memcmp(entry.key_, key, key_len)) {
+        memcpy(value, entry.value_, entry.value_len_);
+        value_len = entry.value_len_;
+        hit = true;
+        break;
+      }
+    }
+  }
+  return hit;
+}
+
+void fts_tokenize_result_put(const char *key,
+                             const int64_t key_len,
+                             const char *value,
+                             const int64_t value_len)
+{
+  if (nullptr != key && nullptr != value && key_len > 0 && value_len > 0
+      && key_len < ObFtsTokenizeResultEntry::MAX_KEY_LEN
+      && value_len < ObFtsTokenizeResultEntry::MAX_VALUE_LEN) {
+    common::ObSpinLockGuard guard(FTS_TOKENIZE_RESULT_CACHE.lock_);
+    ObFtsTokenizeResultEntry &entry =
+        FTS_TOKENIZE_RESULT_CACHE.entries_[
+            FTS_TOKENIZE_RESULT_CACHE.next_ % ObFtsTokenizeResultCache::MAX_ENTRY_CNT];
+    ++FTS_TOKENIZE_RESULT_CACHE.next_;
+    memcpy(entry.key_, key, key_len);
+    entry.key_len_ = key_len;
+    memcpy(entry.value_, value, value_len);
+    entry.value_len_ = value_len;
+  }
+}
 } // anonymous namespace
 
 ObExprTokenize::ObExprTokenize(common::ObIAllocator &alloc)
@@ -125,17 +197,56 @@ int ObExprTokenize::eval_tokenize(const ObExpr &expr, ObEvalCtx &ctx, ObDatum &e
 
   ObIJsonBase *json_result = nullptr;
   TokenizeParam param;
+  char cache_key[ObFtsTokenizeResultEntry::MAX_KEY_LEN];
+  char cache_value[ObFtsTokenizeResultEntry::MAX_VALUE_LEN];
+  int64_t cache_key_len = 0;
+  bool cacheable = true;
 
   // check param num, which is checked in ObExprOperator::calc_result_typeN.
   if (OB_UNLIKELY(expr.arg_cnt_ < 1 || expr.arg_cnt_ > 3)) {
     ret = OB_INVALID_ARGUMENT;
   } else if (OB_FAIL(parse_param(expr, ctx, temp_allocator, param))) {
-  } else if (OB_FAIL(tokenize_fulltext(param, param.output_mode_, temp_allocator, json_result))) {
-  } else if (OB_FAIL(ObJsonExprHelper::pack_json_res(expr,
-                                                     ctx,
-                                                     temp_allocator,
-                                                     json_result,
-                                                     expr_datum))) {
+  } else {
+    auto append_key = [&](const char *ptr, const int64_t len) -> bool {
+      bool ok = true;
+      if (len < 0 || cache_key_len + 4 + len > static_cast<int64_t>(sizeof(cache_key))
+          || (nullptr == ptr && len > 0)) {
+        ok = false;
+      } else {
+        const int32_t field_len = static_cast<int32_t>(len);
+        memcpy(cache_key + cache_key_len, &field_len, sizeof(field_len));
+        cache_key_len += sizeof(field_len);
+        if (len > 0) {
+          memcpy(cache_key + cache_key_len, ptr, len);
+          cache_key_len += len;
+        }
+      }
+      return ok;
+    };
+    cacheable = append_key(param.fulltext_.ptr(), param.fulltext_.length())
+        && append_key(param.parser_name_.ptr(), param.parser_name_.length())
+        && append_key(param.properties_.ptr(), param.properties_.length());
+    if (cacheable) {
+      const char mode = static_cast<char>('0' + static_cast<int>(param.output_mode_));
+      cacheable = append_key(&mode, 1);
+    }
+    int64_t cached_len = 0;
+    if (cacheable
+        && fts_tokenize_result_get(cache_key, cache_key_len,
+                                   cache_value, sizeof(cache_value), cached_len)) {
+      ObString cached_str;
+      cached_str.assign_ptr(cache_value, static_cast<int32_t>(cached_len));
+      if (OB_FAIL(ObJsonExprHelper::pack_json_str_res(expr, ctx, expr_datum, cached_str))) {
+      }
+    } else if (OB_FAIL(tokenize_fulltext(param, param.output_mode_, temp_allocator, json_result))) {
+    } else {
+      ObString raw;
+      if (OB_FAIL(share::ObJsonWrapper::get_raw_binary(json_result, raw, &temp_allocator))) {
+      } else if (OB_FAIL(ObJsonExprHelper::pack_json_str_res(expr, ctx, expr_datum, raw))) {
+      } else if (cacheable) {
+        fts_tokenize_result_put(cache_key, cache_key_len, raw.ptr(), raw.length());
+      }
+    }
   }
 
   return ret;

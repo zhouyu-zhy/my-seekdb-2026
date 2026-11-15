@@ -27,6 +27,30 @@ namespace oceanbase
 {
 namespace storage
 {
+namespace
+{
+// Unaligned loads through memcpy are safe; the high bit in any byte
+// identifies a document that needs the charset-aware analyzer.
+bool beng_is_ascii(const char *text, int64_t len)
+{
+  constexpr uint64_t high_bits = 0x8080808080808080ULL;
+  while (len >= static_cast<int64_t>(sizeof(uint64_t))) {
+    uint64_t bytes;
+    MEMCPY(&bytes, text, sizeof(bytes));
+    if ((bytes & high_bits) != 0) {
+      return false;
+    }
+    text += sizeof(bytes);
+    len -= sizeof(bytes);
+  }
+  for (int64_t i = 0; i < len; ++i) {
+    if (static_cast<unsigned char>(text[i]) >= 0x80) {
+      return false;
+    }
+  }
+  return true;
+}
+} // namespace
 
 int ObBEngFTParser::get_next_token(
     const char *&word,
@@ -133,11 +157,9 @@ int ObBEngFTParser::init(ObFTParserParam *param)
     analysis_ctx_.cs_ = param->cs_;
     analysis_ctx_.filter_stopword_ = false;
     analysis_ctx_.need_grouping_ = false;
-    bool ascii = copy_buf_ != nullptr && param->cs_->cset == &ob_charset_utf8mb4_handler
-        && param->cs_->ctype != nullptr && param->cs_->caseinfo == &ob_unicase_default;
-    for (int64_t i = 0; ascii && i < param->ft_length_; ++i) {
-      ascii = static_cast<unsigned char>(param->fulltext_[i]) < 0x80;
-    }
+    const bool ascii = copy_buf_ != nullptr && param->cs_->cset == &ob_charset_utf8mb4_handler
+        && param->cs_->ctype != nullptr && param->cs_->caseinfo == &ob_unicase_default
+        && beng_is_ascii(param->fulltext_, param->ft_length_);
     if (ascii) {
       ascii_cursor_ = 0;
       is_inited_ = true;

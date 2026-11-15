@@ -15,6 +15,7 @@
  * limitations under the License.
  */
 
+#include "lib/charset/ob_ctype.h"
 #include "object/ob_object.h"
 #define USING_LOG_PREFIX STORAGE_FTS
 
@@ -27,6 +28,29 @@ namespace oceanbase
 {
 namespace storage
 {
+namespace
+{
+// UTF-8 bytes in U+4E00..U+9FFF (CJK Unified Ideographs) have no lowercase
+// mappings in the default case table. Validate the entire token before
+// returning the original bytes. Anything else uses the charset converter.
+bool ft_is_lowercase_utf8_cjk(const ObString &text, const ObCollationType coll)
+{
+  const ObCharsetInfo *cs = ObCharset::get_charset(coll);
+  if (nullptr == cs || cs->cset != &ob_charset_utf8mb4_handler
+      || cs->caseinfo != &ob_unicase_default || text.length() % 3 != 0) {
+    return false;
+  }
+  const auto *bytes = reinterpret_cast<const unsigned char *>(text.ptr());
+  for (int64_t i = 0; i < text.length(); i += 3) {
+    if (bytes[i] < 0xE4 || bytes[i] > 0xE9
+        || bytes[i + 1] < (bytes[i] == 0xE4 ? 0xB8 : 0x80) || bytes[i + 1] > 0xBF
+        || bytes[i + 2] < 0x80 || bytes[i + 2] > 0xBF) {
+      return false;
+    }
+  }
+  return true;
+}
+} // namespace
 
 ////////////////////////////////////////////////////////////////////////////////
 // class ObStopWordChecker
@@ -188,7 +212,8 @@ int ObAddWord::casedown_word(const ObFTWord &src, ObFTWord &dst)
         need_lower = true;
       }
     }
-    if (ascii_only && !need_lower) {
+    if ((ascii_only && !need_lower)
+        || (!ascii_only && ft_is_lowercase_utf8_cjk(src_str, word_meta_.get_collation_type()))) {
       dst = src;
     } else if (ascii_only) {
       char *buf = static_cast<char *>(allocator_.alloc(src_str.length()));

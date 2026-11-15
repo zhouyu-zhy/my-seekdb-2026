@@ -406,21 +406,25 @@ int ObFTRangeDict::match_with_hit(const ObString &single_word,
 int ObFTRangeDict::find_first_char_range(const ObString &single_word, ObIFTDict *&dict) const
 {
   int ret = OB_SUCCESS;
-  bool found = false;
-  for (int i = 0; OB_SUCC(ret) && !found && i < range_dicts_.size(); ++i) {
-    // Every range boundary in the fts dictionaries is compared in the binary
-    // collation, i.e. plain byte order followed by a length tie-break. Doing
-    // that inline avoids a charset dispatch plus a per-character utf8 compare
-    // for every single character of the text being tokenized.
-    if (fts_binary_strcmp(range_dicts_[i].start_.get_word(), single_word) <= 0
-        && fts_binary_strcmp(range_dicts_[i].end_.get_word(), single_word) >= 0) {
-      dict = range_dicts_[i].dict_;
-      found = true;
+  // Ranges are ordered by start word. Binary search the last range whose start
+  // is <= the input word, then confirm the word does not exceed that range end.
+  int64_t left = 0;
+  int64_t right = range_dicts_.size() - 1;
+  int64_t candidate = -1;
+  while (left <= right) {
+    const int64_t mid = left + (right - left) / 2;
+    if (fts_binary_strcmp(range_dicts_[mid].start_.get_word(), single_word) <= 0) {
+      candidate = mid;
+      left = mid + 1;
+    } else {
+      right = mid - 1;
     }
   }
-  if (!found) {
-    // not found, dis match
+  if (candidate < 0
+      || fts_binary_strcmp(range_dicts_[candidate].end_.get_word(), single_word) < 0) {
     ret = OB_ENTRY_NOT_EXIST;
+  } else {
+    dict = range_dicts_[candidate].dict_;
   }
   return ret;
 }

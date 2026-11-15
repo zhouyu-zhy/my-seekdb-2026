@@ -447,6 +447,9 @@ int ObTextRetrievalDaaTTokenIter::init(const ObTextRetrievalScanIterParam &iter_
       } else if (FALSE_IT(doc_id_.set_allocator(allocator_))) {
       } else if (OB_FAIL(doc_id_.init(max_batch_size_))) {
       } else if (OB_FAIL(doc_id_.prepare_allocate(max_batch_size_))) {
+      } else if (FALSE_IT(batch_ptrs_.set_allocator(allocator_))) {
+      } else if (OB_FAIL(batch_ptrs_.init(max_batch_size_))) {
+      } else if (OB_FAIL(batch_ptrs_.prepare_allocate(max_batch_size_))) {
       } else {
         is_inited_ = true;
       }
@@ -466,6 +469,7 @@ void ObTextRetrievalDaaTTokenIter::reset()
 {
   relevance_.reset();
   doc_id_.reset();
+  batch_ptrs_.reset();
   token_iter_->reset();
   cur_idx_ = -1;
   count_ = 0;
@@ -544,6 +548,68 @@ int ObTextRetrievalDaaTTokenIter::save_docids()
 int ObTextRetrievalDaaTTokenIter::get_next_batch(const int64_t capacity, int64_t &count)
 {
   return OB_NOT_IMPLEMENT;
+}
+
+int ObTextRetrievalDaaTTokenIter::get_next_datum_batch(const ObDatum **&ids, int64_t &count)
+{
+  int ret = OB_SUCCESS;
+  ids = nullptr;
+  count = 0;
+  if (OB_UNLIKELY(!is_inited_)) {
+    ret = OB_NOT_INIT;
+  } else if (OB_NOT_NULL(relevance_expr_)) {
+    ret = OB_NOT_IMPLEMENT;
+  } else if (OB_FAIL(token_iter_->get_next_batch(max_batch_size_, count))) {
+    if (OB_UNLIKELY(OB_ITER_END != ret)) {
+    } else if (0 == count) {
+      // keep OB_ITER_END
+    } else {
+      ret = OB_SUCCESS;
+    }
+  }
+  if (OB_SUCC(ret) && count > 0) {
+    // The scan output datums live in the shared evaluation context and are
+    // overwritten by the next dimension's batch.  Copy this batch into the
+    // iterator-owned doc_id_ storage before exposing it.
+    count_ = count;
+    if (OB_FAIL(save_docids())) {
+    } else {
+      for (int64_t i = 0; i < count_; ++i) {
+        batch_ptrs_[i] = &doc_id_[i].get_datum();
+      }
+      ids = &batch_ptrs_[0];
+    }
+  }
+  return ret;
+}
+
+int ObTextRetrievalDaaTTokenIter::get_next_raw_datum_batch(const ObDatum *&ids, int64_t &count)
+{
+  int ret = OB_SUCCESS;
+  ids = nullptr;
+  count = 0;
+  if (OB_UNLIKELY(!is_inited_)) {
+    ret = OB_NOT_INIT;
+  } else if (OB_NOT_NULL(relevance_expr_)) {
+    ret = OB_NOT_IMPLEMENT;
+  } else if (OB_FAIL(token_iter_->get_next_batch(max_batch_size_, count))) {
+    if (OB_UNLIKELY(OB_ITER_END != ret)) {
+    } else if (0 == count) {
+      // keep OB_ITER_END
+    } else {
+      ret = OB_SUCCESS;
+    }
+  }
+  if (OB_SUCC(ret) && count > 0) {
+    const ObDatumVector &doc_id_datum =
+        inv_scan_domain_id_col_->locate_expr_datumvector(*eval_ctx_);
+    if (OB_UNLIKELY(!doc_id_datum.is_batch()) || OB_ISNULL(doc_id_datum.datums_)) {
+      ret = OB_ERR_UNEXPECTED;
+    } else {
+      ids = doc_id_datum.datums_;
+    }
+  }
+  return ret;
 }
 
 int ObTextRetrievalDaaTTokenIter::advance_to(const ObDatum &id_datum)

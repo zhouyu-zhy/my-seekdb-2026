@@ -64,6 +64,7 @@ public:
   int init(const ObTextDaaTParam &param);
   virtual void reuse(const bool switch_tablet = false) override;
   virtual void reset() override;
+  virtual int get_next_rows(const int64_t capacity, int64_t &count) override;
 protected:
   virtual int pre_process() override;
   virtual int do_one_merge_round(int64_t &count) override;
@@ -77,6 +78,25 @@ protected:
   bool skip_doc_id_projection_;
 private:
   int compare_posting_ids(const ObDatum &left, const ObDatum &right) const;
+  int fetch_batch(const int64_t idx);
+  void reset_batches();
+  int ensure_bitmap(const int64_t min_bits);
+  int set_bitmap_id(const uint64_t id);
+  int build_bitmap_count(int64_t &total);
+  void reset_bitmap();
+  static const int64_t MAX_BATCH_DIMS = 4;
+  static const int64_t BITMAP_INITIAL_WORDS = 1024;
+  static const int64_t BITMAP_MAX_WORDS = 1 << 18;
+  const ObDatum **batch_ids_[MAX_BATCH_DIMS] = {};
+  int64_t batch_cnt_[MAX_BATCH_DIMS] = {};
+  int64_t batch_pos_[MAX_BATCH_DIMS] = {};
+  bool batch_done_[MAX_BATCH_DIMS] = {};
+  bool batch_inited_ = false;
+  uint64_t *bitmap_ = nullptr;
+  int64_t bitmap_words_ = 0;
+  int64_t bitmap_remaining_ = 0;
+  bool bitmap_ready_ = false;
+  void *overflow_ids_ = nullptr;
   DISALLOW_COPY_AND_ASSIGN(ObTextDaaTIter);
 };
 

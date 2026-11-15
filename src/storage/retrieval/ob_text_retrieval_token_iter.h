@@ -129,6 +129,13 @@ public:
   void reset();
   virtual int get_next_row() override;
   virtual int get_next_batch(const int64_t capacity, int64_t &count) override;
+  // Exposes the current vectorized posting batch directly.  The returned
+  // datums stay valid until the next call and are only used by the count-only
+  // merge path, which does not need ObDocIdExt values.
+  int get_next_datum_batch(const common::ObDatum **&ids, int64_t &count);
+  // Same as above but returns the scan-owned datums directly.  The caller must
+  // consume them before the next call on this iterator.
+  int get_next_raw_datum_batch(const common::ObDatum *&ids, int64_t &count);
   virtual int advance_to(const ObDatum &id_datum) override;
   virtual int get_curr_score(double &score) const override;
   virtual int get_curr_id(const ObDatum *&id_datum) const override;
@@ -155,6 +162,7 @@ private:
   int64_t count_;
   ObFixedArray<double, ObIAllocator> relevance_; // when ~ObFixedArray(), wikll destory itself
   ObFixedArray<ObDocIdExt, ObIAllocator> doc_id_;
+  ObFixedArray<const common::ObDatum *, ObIAllocator> batch_ptrs_;
   common::ObDatumCmpFuncType cmp_func_;
   bool is_inited_;
   DISALLOW_COPY_AND_ASSIGN(ObTextRetrievalDaaTTokenIter);

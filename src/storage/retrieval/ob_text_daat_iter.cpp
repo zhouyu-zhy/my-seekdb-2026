@@ -30,6 +30,11 @@ struct FtsBitmapOverflow
 {
   common::hash::ObHashSet<uint64_t> set_;
 };
+
+struct FtsDocIdOverflow
+{
+  common::hash::ObHashSet<ObDocIdExt> set_;
+};
 }
 int ObTextDaaTIter::init(const ObTextDaaTParam &param)
 {
@@ -137,6 +142,7 @@ void ObTextDaaTIter::reset_batches()
 
 void ObTextDaaTIter::reset_bitmap()
 {
+  reset_binary_bitmap();
   if (OB_NOT_NULL(overflow_ids_)) {
     static_cast<FtsBitmapOverflow *>(overflow_ids_)->set_.destroy();
     overflow_ids_ = nullptr;
@@ -145,6 +151,76 @@ void ObTextDaaTIter::reset_bitmap()
   bitmap_words_ = 0;
   bitmap_remaining_ = 0;
   bitmap_ready_ = false;
+}
+
+void ObTextDaaTIter::reset_binary_bitmap()
+{
+  if (OB_NOT_NULL(doc_id_overflow_)) {
+    static_cast<FtsDocIdOverflow *>(doc_id_overflow_)->set_.destroy();
+    doc_id_overflow_ = nullptr;
+  }
+  binary_prefix_ = 0;
+  binary_prefix_set_ = false;
+}
+
+int ObTextDaaTIter::add_overflow_doc_id(const ObDatum &datum)
+{
+  int ret = OB_SUCCESS;
+  FtsDocIdOverflow *overflow = static_cast<FtsDocIdOverflow *>(doc_id_overflow_);
+  if (OB_ISNULL(overflow)) {
+    void *buf = iter_allocator_->alloc(sizeof(FtsDocIdOverflow));
+    if (OB_ISNULL(buf)) {
+      ret = OB_ALLOCATE_MEMORY_FAILED;
+    } else {
+      overflow = new (buf) FtsDocIdOverflow();
+      if (OB_FAIL(overflow->set_.create(1024))) {
+      } else {
+        doc_id_overflow_ = overflow;
+      }
+    }
+  }
+  if (OB_SUCC(ret)) {
+    ObDocIdExt id;
+    if (OB_FAIL(id.from_datum(datum))) {
+    } else {
+      ret = overflow->set_.set_refactored(id);
+      if (OB_HASH_EXIST == ret) {
+        ret = OB_SUCCESS;
+      }
+    }
+  }
+  return ret;
+}
+
+int ObTextDaaTIter::add_bitmap_datum(const ObDatum &datum)
+{
+  int ret = OB_SUCCESS;
+  if (!binary_doc_ids_) {
+    ret = set_bitmap_id(datum.get_uint());
+  } else {
+    uint64_t prefix = 0;
+    uint64_t suffix = 0;
+    if (8 == datum.len_) {
+      MEMCPY(&suffix, datum.ptr_, 8);
+    } else if (16 == datum.len_) {
+      MEMCPY(&prefix, datum.ptr_, 8);
+      MEMCPY(&suffix, datum.ptr_ + 8, 8);
+    } else {
+      ret = add_overflow_doc_id(datum);
+    }
+    if (OB_SUCC(ret) && (8 == datum.len_ || 16 == datum.len_)) {
+      if (!binary_prefix_set_) {
+        binary_prefix_ = prefix;
+        binary_prefix_set_ = true;
+      }
+      if (prefix != binary_prefix_) {
+        ret = add_overflow_doc_id(datum);
+      } else {
+        ret = set_bitmap_id(suffix);
+      }
+    }
+  }
+  return ret;
 }
 
 int ObTextDaaTIter::ensure_bitmap(const int64_t min_bits)
@@ -234,7 +310,7 @@ int ObTextDaaTIter::build_bitmap_count(int64_t &total)
         } else if (OB_FAIL(ret)) {
         } else {
           for (int64_t j = 0; OB_SUCC(ret) && j < cnt; ++j) {
-            if (OB_FAIL(set_bitmap_id(ids[j].get_uint()))) {
+            if (OB_FAIL(add_bitmap_datum(ids[j]))) {
             }
           }
         }
@@ -248,6 +324,9 @@ int ObTextDaaTIter::build_bitmap_count(int64_t &total)
     }
     if (OB_NOT_NULL(overflow_ids_)) {
       count += static_cast<FtsBitmapOverflow *>(overflow_ids_)->set_.size();
+    }
+    if (OB_NOT_NULL(doc_id_overflow_)) {
+      count += static_cast<FtsDocIdOverflow *>(doc_id_overflow_)->set_.size();
     }
     total = count;
   }
@@ -303,7 +382,7 @@ int ObTextDaaTIter::get_next_rows(const int64_t capacity, int64_t &count)
     if (OB_ITER_END == ret) {
       count = 0;
     }
-  } else if (!binary_doc_ids_) {
+  } else {
     if (!bitmap_ready_) {
       int64_t total = 0;
       if (OB_FAIL(build_bitmap_count(total))) {
@@ -316,57 +395,6 @@ int ObTextDaaTIter::get_next_rows(const int64_t capacity, int64_t &count)
       int64_t produced = MIN(capacity, bitmap_remaining_);
       if (produced > 0) {
         bitmap_remaining_ -= produced;
-        count = produced;
-        input_row_cnt_ += produced;
-        output_row_cnt_ += produced;
-      } else {
-        ret = OB_ITER_END;
-      }
-    }
-  } else {
-    if (!batch_inited_) {
-      for (int64_t i = 0; OB_SUCC(ret) && i < dim_iters_->count(); ++i) {
-        if (OB_FAIL(fetch_batch(i))) {
-        }
-      }
-      batch_inited_ = OB_SUCC(ret);
-    }
-    int64_t produced = 0;
-    while (OB_SUCC(ret) && produced < capacity) {
-      int64_t min_idx = -1;
-      for (int64_t i = 0; i < dim_iters_->count(); ++i) {
-        if (!batch_done_[i] && batch_pos_[i] < batch_cnt_[i]) {
-          if (min_idx < 0
-              || compare_posting_ids(*batch_ids_[i][batch_pos_[i]],
-                                     *batch_ids_[min_idx][batch_pos_[min_idx]]) < 0) {
-            min_idx = i;
-          }
-        }
-      }
-      if (min_idx < 0) {
-        break;
-      }
-      // Keep the winner by value: fetching the next batch for its dimension
-      // would otherwise invalidate a pointer into the old datum array.
-      const ObDatum min_id = *batch_ids_[min_idx][batch_pos_[min_idx]];
-      ++produced;
-      for (int64_t i = 0; i < dim_iters_->count(); ++i) {
-        if (!batch_done_[i]) {
-          while (batch_pos_[i] < batch_cnt_[i]
-                 && 0 == compare_posting_ids(*batch_ids_[i][batch_pos_[i]], min_id)) {
-            ++batch_pos_[i];
-          }
-        }
-      }
-      for (int64_t i = 0; OB_SUCC(ret) && i < dim_iters_->count(); ++i) {
-        if (!batch_done_[i] && batch_pos_[i] >= batch_cnt_[i]) {
-          if (OB_FAIL(fetch_batch(i))) {
-          }
-        }
-      }
-    }
-    if (OB_SUCC(ret)) {
-      if (produced > 0) {
         count = produced;
         input_row_cnt_ += produced;
         output_row_cnt_ += produced;

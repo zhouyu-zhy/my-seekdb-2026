@@ -84,6 +84,9 @@ private:
   int set_bitmap_id(const uint64_t id);
   int build_bitmap_count(int64_t &total);
   void reset_bitmap();
+  int add_bitmap_datum(const ObDatum &datum);
+  int add_overflow_doc_id(const ObDatum &datum);
+  void reset_binary_bitmap();
   static const int64_t MAX_BATCH_DIMS = 4;
   static const int64_t BITMAP_INITIAL_WORDS = 1024;
   static const int64_t BITMAP_MAX_WORDS = 1 << 18;
@@ -96,7 +99,10 @@ private:
   int64_t bitmap_words_ = 0;
   int64_t bitmap_remaining_ = 0;
   bool bitmap_ready_ = false;
+  uint64_t binary_prefix_ = 0;
+  bool binary_prefix_set_ = false;
   void *overflow_ids_ = nullptr;
+  void *doc_id_overflow_ = nullptr;
   DISALLOW_COPY_AND_ASSIGN(ObTextDaaTIter);
 };
 

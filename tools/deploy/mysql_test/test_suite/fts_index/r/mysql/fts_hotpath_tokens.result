@@ -1,0 +1,15 @@
+SET NAMES utf8mb4;
+SELECT JSON_EXTRACT(
+  TOKENIZE('DATABASE, Database database!', 'beng', '[{"output":"all"}]'),
+  '$.tokens[0].database') AS beng_frequency;
+beng_frequency
+3
+SELECT JSON_EXTRACT(
+  TOKENIZE('ABC abc aBc', 'ik', '[{"output":"all"}]'),
+  '$.tokens[0].abc') AS ik_frequency;
+ik_frequency
+3
+SELECT JSON_CONTAINS(
+  TOKENIZE('全文索引 WORD １２３ 😀', 'ik'), JSON_QUOTE('word')) AS ik_mixed;
+ik_mixed
+1

@@ -1111,7 +1111,9 @@ int ObDASTRTaatIter::init_stores_by_partition()
       } else {
         sql::ObChunkDatumStore *store = new(buf) sql::ObChunkDatumStore(common::ObModIds::OB_SQL_CHUNK_ROW_STORE);
         if(OB_FAIL(store->init(
-          1024 * 8, common::ObCtxIds::DEFAULT_CTX_ID, common::ObModIds::OB_SQL_CHUNK_ROW_STORE,
+          // Keep one normal block per partition before spilling postings to disk.
+          ObChunkDatumStore::BLOCK_SIZE, common::ObCtxIds::DEFAULT_CTX_ID,
+          common::ObModIds::OB_SQL_CHUNK_ROW_STORE,
           true /* enable dump */,
           0, /* row_extra_size */
           ObChunkDatumStore::BLOCK_SIZE))) {

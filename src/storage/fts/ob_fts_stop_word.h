@@ -83,7 +83,9 @@ public:
 
 private:
   static const int64_t DEFAULT_STOPWORD_BUCKET_NUM = 37L;
-  typedef common::hash::ObHashSet<storage::ObFTWord> StopWordSet;
+  // The server initializes this set before accepting requests and destroys it
+  // after the SQL workers stop. Lookups do not write to it.
+  using StopWordSet = common::hash::ObHashSet<storage::ObFTWord, common::hash::NoPthreadDefendMode>;
 
   StopWordSet stopword_set_;
   ObObjMeta stopword_type_;

@@ -51,7 +51,8 @@ private:
   ObObjMeta meta_;
 };
 
-typedef common::hash::ObHashMap<ObFTWord, int64_t> ObFTWordMap;
+// The word accumulator belongs to a tokenizer invocation or a single scan.
+using ObFTWordMap = common::hash::ObHashMap<ObFTWord, int64_t, common::hash::NoPthreadDefendMode>;
 
 class ObAddWordFlag final
 {

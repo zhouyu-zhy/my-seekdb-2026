@@ -256,6 +256,22 @@ void ObFTDATReader<DATA_TYPE>::build_cjk_code_lookup(ObIAllocator &allocator)
     dat_->get_map()->fill_cjk_codes(codes);
     cjk_codes_ = codes;
   }
+
+  // The check array records the parent of each occupied state. Mark the
+  // states with children so a completed leaf need not stay in the IK hit list.
+  const size_t bytes = (dat_->array_size_ + 7) / 8;
+  void *bitmap = allocator.alloc(bytes);
+  if (bitmap != nullptr) {
+    auto *has_children = new (bitmap) uint8_t[bytes]{};
+    const auto *check = reinterpret_cast<const int32_t *>(dat_->buff + dat_->check_offset_);
+    for (size_t i = 0; i < dat_->array_size_; ++i) {
+      const int32_t parent = check[i];
+      if (parent > 0 && static_cast<size_t>(parent) < dat_->array_size_) {
+        has_children[parent / 8] |= uint8_t{1} << (parent % 8);
+      }
+    }
+    has_children_ = has_children;
+  }
 }
 
 template <typename DATA_TYPE>
@@ -301,7 +317,9 @@ int ObFTDATReader<DATA_TYPE>::match_with_hit(const ObString &ft_char,
       hit.end_pos_ = hit.end_pos_ + ft_char.length();
       hit.char_cnt_++;
       hit.set_match();
-      hit.set_prefix(); // to be checked next time
+      if (has_children_ == nullptr || (has_children_[idx / 8] & (uint8_t{1} << (idx % 8))) != 0) {
+        hit.set_prefix();
+      }
     } else {
       hit.base_idx_ = idx;
       hit.end_pos_ = hit.end_pos_ + ft_char.length();

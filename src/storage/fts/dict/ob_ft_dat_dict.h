@@ -169,7 +169,7 @@ template <typename DataType = void>
 class ObFTDATReader
 {
 public:
-  ObFTDATReader(ObFTDAT *dat) : dat_(dat), cjk_codes_(nullptr) {}
+  ObFTDATReader(ObFTDAT *dat) : dat_(dat), cjk_codes_(nullptr), has_children_(nullptr) {}
 
   void build_cjk_code_lookup(ObIAllocator &allocator);
 
@@ -181,6 +181,7 @@ public:
 private:
   ObFTDAT *dat_;
   const ObFTWordCode *cjk_codes_;
+  const uint8_t *has_children_;
 
 private:
   DISALLOW_COPY_AND_ASSIGN(ObFTDATReader);

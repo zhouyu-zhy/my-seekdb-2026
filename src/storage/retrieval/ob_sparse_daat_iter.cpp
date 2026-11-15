@@ -417,13 +417,24 @@ int ObSRDaaTIterImpl::project_results(const int64_t count)
 
   if (eval_ctx->is_vectorized()) {
     sql::ObBitVector &id_evaluated_flags = id_proj_expr->get_evaluated_flags(*eval_ctx);
-    for (int64_t i = 0; i < count; ++i) {
-      guard.set_batch_idx(i);
-      ObDatum &id_proj_datum = id_proj_expr->locate_datum_for_write(*eval_ctx);
-      set_datum_func_(id_proj_datum, buffered_domain_ids_[i]);
-      id_evaluated_flags.set(i);
-      id_proj_expr->set_evaluated_projected(*eval_ctx);
+    if (id_proj_expr->is_batch_result()
+        && set_datum_func_ == ObISparseRetrievalMergeIter::set_datum_shallow) {
+      // These datums borrow stable buffers from buffered_domain_ids_. Assigning
+      // the whole datum avoids restoring each destination's unused data pointer.
+      const ObDatumVector output_ids = id_proj_expr->locate_expr_datumvector(*eval_ctx);
+      for (int64_t i = 0; i < count; ++i) {
+        output_ids.at(i)->set_datum(buffered_domain_ids_[i].get_datum());
+      }
+      id_evaluated_flags.set_all(int64_t{0}, count);
+    } else {
+      for (int64_t i = 0; i < count; ++i) {
+        guard.set_batch_idx(i);
+        ObDatum &id_proj_datum = id_proj_expr->locate_datum_for_write(*eval_ctx);
+        set_datum_func_(id_proj_datum, buffered_domain_ids_[i]);
+        id_evaluated_flags.set(i);
+      }
     }
+    id_proj_expr->set_evaluated_projected(*eval_ctx);
     if (iter_param_->need_project_relevance()) {
       sql::ObBitVector &relevance_evaluated_flags = relevance_proj_expr->get_evaluated_flags(*eval_ctx);
       for (int64_t i = 0; i < count; ++i) {

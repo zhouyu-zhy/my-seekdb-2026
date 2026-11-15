@@ -76,7 +76,10 @@ int seekdb_cuvs_search(void* handle, const float* query, long nq, long topk,
     cuvsFilter f; f.type=NO_FILTER; f.addr=(uintptr_t)0;
     if (cuvsCagraSearch(h->res, sp, h->idx, &qt, &nt, &dt, f) != CUVS_SUCCESS) { rc=15; goto done; }
     if (cudaMemcpy(out_ids, nd, sizeof(unsigned)*nq*topk, cudaMemcpyDefault) != cudaSuccess) { rc=16; goto done; }
-    if (out_dist) cudaMemcpy(out_dist, dd, sizeof(float)*nq*topk, cudaMemcpyDefault);
+    if (out_dist && cudaMemcpy(out_dist, dd, sizeof(float)*nq*topk, cudaMemcpyDefault) != cudaSuccess) {
+      rc = 17;
+      goto done;
+    }
   }
 done:
   if (sp) cuvsCagraSearchParamsDestroy(sp);
@@ -92,7 +95,7 @@ void seekdb_cuvs_free(void* handle)
   sk_cuvs_index* h = (sk_cuvs_index*)handle;
   if (!h) return;
   cuvsCagraIndexDestroy(h->idx);
-  cuvsCagraIndexParamsDestroy(h->ip);
+  if (h->ip) cuvsCagraIndexParamsDestroy(h->ip);
   cuvsResourcesDestroy(h->res);
   free(h);
 }
@@ -139,6 +142,76 @@ fail_res:
   cuvsResourcesDestroy(index->res);
 fail:
   fprintf(stderr, "[seekdb_cuvs] deserialize failed: %s\n", cuvsGetLastErrorText());
+  free(index);
+  return NULL;
+}
+
+uint32_t* seekdb_cuvs_export_graph(void* handle, int32_t* degree)
+{
+  sk_cuvs_index* index = (sk_cuvs_index*)handle;
+  if (!index || !degree) return NULL;
+  *degree = 0;
+  DLManagedTensor graph = {0};
+  if (cuvsCagraIndexGetGraph(index->idx, &graph) != CUVS_SUCCESS) return NULL;
+  const DLTensor* view = &graph.dl_tensor;
+  uint32_t* rows = NULL;
+  if (view->data && view->shape && view->ndim == 2 && view->shape[0] == index->n &&
+      view->shape[1] > 0 && view->shape[1] < index->n && view->shape[1] <= INT32_MAX &&
+      view->dtype.code == kDLUInt && view->dtype.bits == 32 && view->dtype.lanes == 1 &&
+      view->byte_offset == 0 &&
+      (!view->strides || (view->strides[0] == view->shape[1] && view->strides[1] == 1)) &&
+      (size_t)index->n <= SIZE_MAX / sizeof(uint32_t) / (size_t)view->shape[1]) {
+    const size_t bytes = (size_t)index->n * (size_t)view->shape[1] * sizeof(uint32_t);
+    rows = (uint32_t*)malloc(bytes);
+    if (rows && cuvsStreamSync(index->res) == CUVS_SUCCESS &&
+        cudaMemcpy(rows, view->data, bytes, cudaMemcpyDefault) == cudaSuccess) {
+      *degree = (int32_t)view->shape[1];
+    } else {
+      free(rows);
+      rows = NULL;
+    }
+  }
+  if (graph.deleter) graph.deleter(&graph);
+  return rows;
+}
+
+void* seekdb_cuvs_restore_graph(const float* base, const uint32_t* graph,
+                               long n, long dim, int32_t degree)
+{
+  if (!base || !graph || n <= 0 || n > UINT32_MAX || dim <= 0 || degree <= 0 || degree >= n ||
+      (size_t)n > SIZE_MAX / sizeof(float) / (size_t)dim ||
+      (size_t)n > SIZE_MAX / sizeof(uint32_t) / (size_t)degree) return NULL;
+  sk_cuvs_index* index = (sk_cuvs_index*)calloc(1, sizeof(*index));
+  if (!index) return NULL;
+  if (cuvsResourcesCreate(&index->res) != CUVS_SUCCESS) goto fail;
+  if (cuvsCagraIndexCreate(&index->idx) != CUVS_SUCCESS) goto fail_res;
+  {
+    int64_t dataset_shape[2] = {n, dim};
+    int64_t graph_shape[2] = {n, degree};
+    DLManagedTensor dataset = {0}, adjacency = {0};
+    dataset.dl_tensor.data = (void*)base;
+    dataset.dl_tensor.device.device_type = kDLCPU;
+    dataset.dl_tensor.ndim = 2;
+    dataset.dl_tensor.dtype.code = kDLFloat;
+    dataset.dl_tensor.dtype.bits = 32;
+    dataset.dl_tensor.dtype.lanes = 1;
+    dataset.dl_tensor.shape = dataset_shape;
+    adjacency.dl_tensor = dataset.dl_tensor;
+    adjacency.dl_tensor.data = (void*)graph;
+    adjacency.dl_tensor.dtype.code = kDLUInt;
+    adjacency.dl_tensor.shape = graph_shape;
+    if (cuvsCagraIndexFromArgs(index->res, L2Expanded, &adjacency, &dataset, index->idx) != CUVS_SUCCESS ||
+        cuvsStreamSync(index->res) != CUVS_SUCCESS) goto fail_idx;
+  }
+  index->n = n;
+  index->dim = dim;
+  return index;
+fail_idx:
+  cuvsCagraIndexDestroy(index->idx);
+fail_res:
+  cuvsResourcesDestroy(index->res);
+fail:
+  fprintf(stderr, "[seekdb_cuvs] graph restore failed: %s\n", cuvsGetLastErrorText());
   free(index);
   return NULL;
 }

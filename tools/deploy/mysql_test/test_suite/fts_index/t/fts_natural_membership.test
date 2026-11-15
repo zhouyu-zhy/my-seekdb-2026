@@ -1,0 +1,14 @@
+CREATE TABLE fts_natural_membership (id BIGINT PRIMARY KEY, body TEXT,
+  FULLTEXT INDEX ft_body(body) WITH PARSER beng);
+INSERT INTO fts_natural_membership VALUES
+  (1, 'indexed indexed audit'), (2, 'indexed data'), (3, 'irrelevant data'),
+  (4, NULL), (5, 'audit');
+SELECT COUNT(*) AS hits FROM fts_natural_membership
+  WHERE MATCH(body) AGAINST('indexed audit');
+SELECT COUNT(*) AS hits FROM fts_natural_membership
+  WHERE MATCH(body) AGAINST('indexed INDEXED audit');
+SELECT COUNT(*) AS hits FROM fts_natural_membership
+  WHERE MATCH(body) AGAINST('---');
+SELECT COUNT(*) AS hits FROM fts_natural_membership
+  WHERE MATCH(body) AGAINST('+indexed -audit' IN BOOLEAN MODE);
+DROP TABLE fts_natural_membership;

@@ -19,11 +19,11 @@
 #define _OCEANBASE_STORAGE_FTS_OB_IK_FT_PARSER_H_
 
 #include "lib/allocator/ob_allocator.h"
-#include "storage/fts/dict/ob_ft_cache_container.h"
-#include "storage/fts/dict/ob_ft_dict.h"
-#include "storage/fts/dict/ob_ft_dict_def.h"
-#include "storage/fts/ik/ob_ik_processor.h"
 #include "storage/fts/ik/ob_ik_arbitrator.h"
+#include "storage/fts/ik/ob_ik_cjk_processor.h"
+#include "storage/fts/ik/ob_ik_letter_processor.h"
+#include "storage/fts/ik/ob_ik_quantifier_processor.h"
+#include "storage/fts/ik/ob_ik_surrogate_processor.h"
 #include "data_plane/fts/ob_fts_parser.h"
 
 #include <cstdint>
@@ -31,20 +31,16 @@ namespace oceanbase
 {
 namespace storage
 {
-class ObFTDictHub;
-
 class ObIKFTParser final : public ObITokenIterator
 {
 public:
-  ObIKFTParser(ObIAllocator &allocator, ObFTDictHub *hub)
+  ObIKFTParser(ObIAllocator &allocator, const ObIFTDict &main_dict, const ObIFTDict &quantifier_dict)
       : allocator_(allocator),
         is_inited_(false),
         coll_type_(ObCollationType::CS_TYPE_INVALID),
         ctx_(nullptr),
-        hub_(hub),
-        segmenters_(allocator_),
-        dict_main_(nullptr),
-        dict_quan_(nullptr)
+        quantifier_segmenter_(quantifier_dict, allocator),
+        cjk_segmenter_(main_dict, allocator)
   {
   }
 
@@ -69,10 +65,6 @@ private:
                        const uint8_t char_len,
                        const ObFTCharUtil::CharType type);
 
-private:
-
-  int init_segmenter(const ObFTParserParam &param);
-
   int init_ctx(const ObFTParserParam &param);
 
   void reset();
@@ -85,12 +77,11 @@ private:
 
   ObCollationType coll_type_;
   TokenizeContext *ctx_;
-  ObFTDictHub *hub_;
-  ObList<ObIIKProcessor *, ObIAllocator> segmenters_;
+  ObIKLetterProcessor letter_segmenter_;
+  ObIKQuantifierProcessor quantifier_segmenter_;
+  ObIKCJKProcessor cjk_segmenter_;
+  ObIKSurrogateProcessor surrogate_segmenter_;
   ObIKArbitrator arb_;
-
-  const ObIFTDict *dict_main_;
-  const ObIFTDict *dict_quan_;
 
   DISABLE_COPY_ASSIGN(ObIKFTParser);
 };

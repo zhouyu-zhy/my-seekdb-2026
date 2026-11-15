@@ -491,6 +491,14 @@ inline int ObFTCharUtil::do_classify_with_len(const char *input,
 
   if (OB_ISNULL(input) || buf_size <= 0) {
     ret = OB_INVALID_ARGUMENT;
+  } else if (CS_TYPE == CHARSET_UTF8MB4 && static_cast<unsigned char>(input[0]) < 0x80) {
+    const unsigned char c = static_cast<unsigned char>(input[0]);
+    char_len = 1;
+    if (('A' <= c && c <= 'Z') || ('a' <= c && c <= 'z')) {
+      type = CharType::ENGLISH_LETTER;
+    } else if ('0' <= c && c <= '9') {
+      type = CharType::ARABIC_LETTER;
+    }
   } else {
     const unsigned char *ustart = reinterpret_cast<const unsigned char *>(input);
     const unsigned char *uend = reinterpret_cast<const unsigned char *>(input + buf_size);
@@ -499,7 +507,9 @@ inline int ObFTCharUtil::do_classify_with_len(const char *input,
       ret = OB_INVALID_ARGUMENT;
     } else {
       char_len = code_size;
-      if (ObUnicodeBlockUtils::is_alpha(unicode)) {
+      if (unicode >= 0x4E00 && unicode <= 0x9FFF) {
+        type = CharType::CHINESE;
+      } else if (ObUnicodeBlockUtils::is_alpha(unicode)) {
         type = CharType::ENGLISH_LETTER;
       } else if (ObUnicodeBlockUtils::is_arabic(unicode)) {
         type = CharType::ARABIC_LETTER;

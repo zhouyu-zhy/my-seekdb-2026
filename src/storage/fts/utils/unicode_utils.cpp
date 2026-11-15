@@ -17,7 +17,7 @@
 
 #include "src/storage/fts/utils/unicode_utils.h"
 
-#include "lib/charset/ob_charset_string_helper.h"
+#include <array>
 #include "lib/utility/ob_macro_utils.h"
 
 namespace oceanbase
@@ -142,44 +142,22 @@ bool ObUnicodeBlockUtils::is_convertable_fullwidth(const ob_wc_t unicode)
   return FW_SPACE || FW_OHTER;
 }
 
-ob_wc_t ObUnicodeBlockUtils::get_unicode_from_u8(const char *input, const uint8_t char_len)
-{
-  ob_wc_t unicode = 0;
-  const unsigned char *ustart = reinterpret_cast<const unsigned char *>(input);
-  const unsigned char *uend = reinterpret_cast<const unsigned char *>(&input[char_len]);
-  int code_size = common::ob_charset_decode_unicode<common::CHARSET_UTF8MB4>(ustart, uend, unicode);
-  return unicode;
-}
-
-#define OB_IK_GET_NUMBER_UNICODE(str) get_unicode_from_u8(str, sizeof(str))
 bool ObUnicodeBlockUtils::is_unicode_cn_number(ob_wc_t unicode)
 {
-  // Chinese numerical characters: "一二两三四五六七八九十零壹贰叁肆伍陆柒捌玖拾百千万亿拾佰仟萬億兆卅廿"
-  static const ob_wc_t cn_number_array[] = {
-      OB_IK_GET_NUMBER_UNICODE("一"), OB_IK_GET_NUMBER_UNICODE("二"),
-      OB_IK_GET_NUMBER_UNICODE("两"), OB_IK_GET_NUMBER_UNICODE("三"),
-      OB_IK_GET_NUMBER_UNICODE("四"), OB_IK_GET_NUMBER_UNICODE("五"),
-      OB_IK_GET_NUMBER_UNICODE("六"), OB_IK_GET_NUMBER_UNICODE("七"),
-      OB_IK_GET_NUMBER_UNICODE("八"), OB_IK_GET_NUMBER_UNICODE("九"),
-      OB_IK_GET_NUMBER_UNICODE("十"), OB_IK_GET_NUMBER_UNICODE("零"),
-      OB_IK_GET_NUMBER_UNICODE("壹"), OB_IK_GET_NUMBER_UNICODE("贰"),
-      OB_IK_GET_NUMBER_UNICODE("叁"), OB_IK_GET_NUMBER_UNICODE("肆"),
-      OB_IK_GET_NUMBER_UNICODE("伍"), OB_IK_GET_NUMBER_UNICODE("陆"),
-      OB_IK_GET_NUMBER_UNICODE("柒"), OB_IK_GET_NUMBER_UNICODE("捌"),
-      OB_IK_GET_NUMBER_UNICODE("玖"), OB_IK_GET_NUMBER_UNICODE("拾"),
-      OB_IK_GET_NUMBER_UNICODE("百"), OB_IK_GET_NUMBER_UNICODE("千"),
-      OB_IK_GET_NUMBER_UNICODE("万"), OB_IK_GET_NUMBER_UNICODE("亿"),
-      OB_IK_GET_NUMBER_UNICODE("拾"), OB_IK_GET_NUMBER_UNICODE("佰"),
-      OB_IK_GET_NUMBER_UNICODE("仟"), OB_IK_GET_NUMBER_UNICODE("萬"),
-      OB_IK_GET_NUMBER_UNICODE("億"), OB_IK_GET_NUMBER_UNICODE("兆"),
-      OB_IK_GET_NUMBER_UNICODE("卅"), OB_IK_GET_NUMBER_UNICODE("廿"),
-  };
-  for (int i = 0; i < sizeof(cn_number_array) / sizeof(cn_number_array[0]); i++) {
-    if (unicode == cn_number_array[i]) {
-      return true;
+  // The supported numeral characters all lie in the CJK unified block.
+  static constexpr ob_wc_t CJK_START = 0x4E00;
+  static constexpr ob_wc_t CJK_END = 0xA000;
+  static constexpr auto number_bits = [] {
+    std::array<uint64_t, (CJK_END - CJK_START) / 64> bits{};
+    constexpr char32_t numerals[] = U"一二两三四五六七八九十零壹贰叁肆伍陆柒捌玖拾百千万亿佰仟萬億兆卅廿";
+    for (int64_t i = 0; numerals[i] != U'\0'; ++i) {
+      const ob_wc_t offset = numerals[i] - CJK_START;
+      bits[offset / 64] |= uint64_t{1} << (offset % 64);
     }
-  }
-  return false;
+    return bits;
+  }();
+  return unicode >= CJK_START && unicode < CJK_END
+      && (number_bits[(unicode - CJK_START) / 64] & (uint64_t{1} << ((unicode - CJK_START) % 64))) != 0;
 }
 
 } //  namespace storage

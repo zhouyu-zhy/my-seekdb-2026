@@ -19,4 +19,16 @@ SELECT COUNT(*) AS hits FROM fts_natural_membership
   WHERE MATCH(body) AGAINST('+indexed -audit' IN BOOLEAN MODE);
 hits
 1
+SELECT COUNT(*) AS hits FROM (SELECT id FROM fts_natural_membership
+  WHERE MATCH(body) AGAINST('indexed audit') LIMIT 2) AS matches;
+hits
+2
+SELECT COUNT(*) AS hits FROM (SELECT id FROM fts_natural_membership
+  WHERE MATCH(body) AGAINST('indexed audit') LIMIT 2 OFFSET 2) AS matches;
+hits
+1
+SELECT COUNT(*) AS hits FROM (SELECT id FROM fts_natural_membership
+  WHERE MATCH(body) AGAINST('nonexistent') LIMIT 2) AS matches;
+hits
+0
 DROP TABLE fts_natural_membership;

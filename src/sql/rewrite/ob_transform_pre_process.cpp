@@ -179,7 +179,7 @@ int ObTransformPreProcess::transform_one_stmt(common::ObIArray<ObParentDMLStmt> 
     }
     if (OB_SUCC(ret)) {
       if (stmt->get_match_exprs().count() > 0 &&
-          OB_FAIL(preserve_order_for_fulltext_search(stmt, is_happened))) {
+          OB_FAIL(preserve_order_for_fulltext_search(parent_stmts, stmt, is_happened))) {
       } else {
         trans_happened |= is_happened;
       }
@@ -3788,9 +3788,65 @@ int ObTransformPreProcess::do_flatten_conditions(ObDMLStmt *stmt, ObIArray<ObRaw
   return ret;
 }
 
+namespace
+{
+// A scalar COUNT(*) sees only how many rows the derived table's LIMIT
+// retains. The identity and order of those rows are unobservable.
+bool count_only_fulltext_view(const ObIArray<ObParentDMLStmt> &parents,
+                              const ObDMLStmt &stmt)
+{
+  if (parents.empty() || !stmt.is_select_stmt() || !stmt.has_limit()
+      || stmt.get_limit_percent_expr() != nullptr || stmt.is_fetch_with_ties()
+      || stmt.get_match_exprs().count() != 1 || stmt.get_condition_exprs().count() != 1) {
+    return false;
+  }
+
+  const ObMatchFunRawExpr *match = stmt.get_match_exprs().at(0);
+  const ObRawExpr *filter = stmt.get_condition_exprs().at(0);
+  if (match == nullptr || match->is_es_match()
+      || match->get_mode_flag() != NATURAL_LANGUAGE_MODE
+      || (filter != match && (filter == nullptr || filter->get_expr_type() != T_OP_BOOL
+          || filter->get_param_count() != 1 || filter->get_param_expr(0) != match))) {
+    return false;
+  }
+
+  const TableItem *base_table = stmt.get_table_item(0);
+  const auto &view = static_cast<const ObSelectStmt &>(stmt);
+  if (base_table == nullptr || base_table->for_update_ || view.is_set_stmt()) {
+    return false;
+  }
+  for (int64_t idx = 0; idx < view.get_select_items().count(); ++idx) {
+    const ObRawExpr *column = view.get_select_items().at(idx).expr_;
+    if (column == nullptr || (!column->is_column_ref_expr() && !column->is_const_expr())) {
+      return false;
+    }
+  }
+
+  const ObDMLStmt *parent_stmt = parents.at(parents.count() - 1).stmt_;
+  if (parent_stmt == nullptr || !parent_stmt->is_select_stmt()
+      || parent_stmt->get_from_item_size() != 1 || parent_stmt->get_table_size() != 1
+      || !parent_stmt->get_condition_exprs().empty()) {
+    return false;
+  }
+  const auto &parent = static_cast<const ObSelectStmt &>(*parent_stmt);
+  const TableItem *derived = parent.get_table_item(0);
+  if (derived == nullptr || !derived->is_generated_table() || derived->ref_query_ != &stmt
+      || parent.is_set_stmt() || !parent.is_scala_group_by() || parent.has_window_function()
+      || !parent.get_having_exprs().empty() || parent.get_aggr_item_size() != 1
+      || parent.get_select_items().count() != 1 || parent.has_order_by()) {
+    return false;
+  }
+  const ObAggFunRawExpr *aggregate = parent.get_aggr_items().at(0);
+  return aggregate != nullptr && parent.get_select_items().at(0).expr_ == aggregate
+      && aggregate->get_expr_type() == T_FUN_COUNT && aggregate->get_real_param_count() == 0;
+}
+} // namespace
+
 // full-text index queries on a single base table are processed with order preservation. 
 // (Order is not preserved in multi-table join scenarios.)
-int ObTransformPreProcess::preserve_order_for_fulltext_search(ObDMLStmt *stmt, bool& trans_happened)
+int ObTransformPreProcess::preserve_order_for_fulltext_search(const ObIArray<ObParentDMLStmt> &parents,
+                                                                ObDMLStmt *stmt,
+                                                                bool &trans_happened)
 {
   int ret = OB_SUCCESS;
   trans_happened = false;
@@ -3812,6 +3868,18 @@ int ObTransformPreProcess::preserve_order_for_fulltext_search(ObDMLStmt *stmt, b
     ret = OB_ERR_UNEXPECTED;
   } else if (!table_item->is_basic_table()) {
     // do nothing
+  } else if (count_only_fulltext_view(parents, *stmt)) {
+    auto *view = static_cast<ObSelectStmt *>(stmt);
+    ObConstRawExpr *one = nullptr;
+    // Discard unused projections so the limited posting scan can also avoid
+    // fetching each selected row from the base table.
+    if (OB_FAIL(ObRawExprUtils::build_const_int_expr(*ctx_->expr_factory_, ObIntType, 1, one))) {
+    } else {
+      for (int64_t i = 0; i < view->get_select_items().count(); ++i) {
+        view->get_select_items().at(i).expr_ = one;
+      }
+      trans_happened = true;
+    }
   } else if (0 == stmt->get_match_exprs().count()) {
     // do nothing
   } else if (stmt->get_match_exprs().at(0) != nullptr && stmt->get_match_exprs().at(0)->is_es_match()) {

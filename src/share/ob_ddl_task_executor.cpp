@@ -15,6 +15,8 @@
  */
 
 #include "ob_ddl_task_executor.h"
+#include "lib/alloc/alloc_func.h"
+#include "lib/cpu/ob_cpu_topology.h"
 #include "lib/ob_running_mode.h"
 #include "lib/thread/ob_thread_name.h"
 #include "lib/stat/ob_diagnostic_info_guard.h"
@@ -350,7 +352,11 @@ int ObDDLLocalBuilder::push_task(ObAsyncTask &task)
 
 int64_t ObDDLLocalBuilder::get_thread_cnt_() const
 {
-  return lib::is_mini_mode() ? 1 : 16;
+  // A single worker serializes independent builds, including the inverted
+  // and document-word indexes created by the same full-text DDL.
+  constexpr int64_t min_memory_per_worker = lib::DEFAULT_MEMORY_BUDGET;
+  return !lib::is_mini_mode() ? 16
+      : (common::get_cpu_count() >= 4 && lib::get_memory_budget() >= 2 * min_memory_per_worker ? 2 : 1);
 }
 
 }  // end namespace share

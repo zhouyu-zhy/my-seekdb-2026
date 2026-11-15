@@ -39,6 +39,7 @@ public:
   {
   }
   int init() override;
+  void build_cjk_code_lookup(ObIAllocator &allocator) { reader_.build_cjk_code_lookup(allocator); }
   int match(const ObString &single_word, ObDATrieHit &hit) const override;
   int match(const ObString &words, bool &is_match) const override;
   int match_with_hit(const ObString &single_word,

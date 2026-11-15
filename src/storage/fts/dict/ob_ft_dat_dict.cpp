@@ -248,20 +248,37 @@ int ObFTDATBuilder<DATA_TYPE>::encode(const ObString &word, ObFTWordCode &code, 
 }
 
 template <typename DATA_TYPE>
+void ObFTDATReader<DATA_TYPE>::build_cjk_code_lookup(ObIAllocator &allocator)
+{
+  void *buf = allocator.alloc(sizeof(ObFTWordCode) * FTS_CJK_COUNT);
+  if (buf != nullptr) {
+    auto *codes = new (buf) ObFTWordCode[FTS_CJK_COUNT]{};
+    dat_->get_map()->fill_cjk_codes(codes);
+    cjk_codes_ = codes;
+  }
+}
+
+template <typename DATA_TYPE>
 int ObFTDATReader<DATA_TYPE>::match_with_hit(const ObString &ft_char,
                                              const ObDATrieHit &last_hit,
                                              ObDATrieHit &hit) const
 {
   int ret = OB_SUCCESS;
-  ObFTWordCode code;
+  ObFTWordCode code = 0;
   hit.set_unmatch();
-  auto *map = dat_->get_map();
   int32_t *base = reinterpret_cast<int32_t *>(dat_->buff + dat_->base_offset_);
   int32_t *check = reinterpret_cast<int32_t *>(dat_->buff + dat_->check_offset_);
 
-  ObFTSingleWord word;
-  word.set_word(ft_char.ptr(), ft_char.length());
-  if (OB_FAIL(dat_->get_map()->find(word, code)) && OB_ENTRY_NOT_EXIST != ret) {
+  const int32_t index = cjk_codes_ != nullptr ? utf8_cjk_index(ft_char) : -1;
+  if (index >= 0) {
+    code = cjk_codes_[index];
+    ret = code == 0 ? OB_ENTRY_NOT_EXIST : OB_SUCCESS;
+  } else {
+    ObFTSingleWord word;
+    word.set_word(ft_char.ptr(), ft_char.length());
+    ret = dat_->get_map()->find(word, code);
+  }
+  if (OB_FAIL(ret) && OB_ENTRY_NOT_EXIST != ret) {
   } else if (OB_ENTRY_NOT_EXIST == ret) {
     ret = OB_SUCCESS;
     hit.set_unmatch();
@@ -326,6 +343,19 @@ int ObArrayHashMap::find(const ObFTSingleWord &word, ObFTWordCode &code) const
     }
   }
   return ret;
+}
+
+void ObArrayHashMap::fill_cjk_codes(ObFTWordCode *codes) const
+{
+  for (uint32_t i = 0; i < header_.capacity_; ++i) {
+    const Entry &entry = header_.data[i];
+    if (entry.used) {
+      const int32_t index = utf8_cjk_index(entry.word.get_word());
+      if (index >= 0) {
+        codes[index] = entry.code;
+      }
+    }
+  }
 }
 
 int ObArrayHashMap::insert(const ObString &key, ObFTWordCode code)

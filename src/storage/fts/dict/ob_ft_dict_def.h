@@ -27,6 +27,24 @@ namespace oceanbase
 namespace storage
 {
 typedef int32_t ObFTWordCode;
+
+constexpr uint32_t FTS_CJK_FIRST = 0x4E00;
+constexpr uint32_t FTS_CJK_END = 0xA000;
+constexpr uint32_t FTS_CJK_COUNT = FTS_CJK_END - FTS_CJK_FIRST;
+
+inline int32_t utf8_cjk_index(const ObString &word)
+{
+  if (word.length() != 3) {
+    return -1;
+  }
+  const auto *bytes = reinterpret_cast<const unsigned char *>(word.ptr());
+  if (bytes[0] < 0xE4 || bytes[0] > 0xE9
+      || (bytes[1] & 0xC0) != 0x80 || (bytes[2] & 0xC0) != 0x80) {
+    return -1;
+  }
+  const uint32_t cp = ((bytes[0] & 0x0F) << 12) | ((bytes[1] & 0x3F) << 6) | (bytes[2] & 0x3F);
+  return cp < FTS_CJK_FIRST || cp >= FTS_CJK_END ? -1 : static_cast<int32_t>(cp - FTS_CJK_FIRST);
+}
 typedef int32_t ObFTWordBase;
 typedef uint32_t ObFTWordStateIndex;
 

@@ -67,6 +67,7 @@ public:
   int insert(const ObString &key, ObFTWordCode code);
 
   int find(const ObFTSingleWord &word, ObFTWordCode &code) const;
+  void fill_cjk_codes(ObFTWordCode *codes) const;
 
 private:
   struct Header header_;
@@ -168,7 +169,9 @@ template <typename DataType = void>
 class ObFTDATReader
 {
 public:
-  ObFTDATReader(ObFTDAT *dat) : dat_(dat) {}
+  ObFTDATReader(ObFTDAT *dat) : dat_(dat), cjk_codes_(nullptr) {}
+
+  void build_cjk_code_lookup(ObIAllocator &allocator);
 
   // Match single word with hit.
   int match_with_hit(const ObString &single_word,
@@ -177,6 +180,7 @@ public:
 
 private:
   ObFTDAT *dat_;
+  const ObFTWordCode *cjk_codes_;
 
 private:
   DISALLOW_COPY_AND_ASSIGN(ObFTDATReader);

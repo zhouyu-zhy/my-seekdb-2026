@@ -40,7 +40,7 @@ public:
                 ObFTCacheRangeContainer *range_container,
                 const ObFTDictDesc &desc)
       : is_inited_(false), desc_(desc), range_alloc_(lib::ObMemAttr("Range Dict")),
-        range_dicts_(&range_alloc_), range_container_(range_container)
+        range_dicts_(&range_alloc_), range_container_(range_container), cjk_roots_(nullptr)
   {
   }
   ~ObFTRangeDict() override{};
@@ -96,9 +96,19 @@ private:
     }
     range_dicts_.reset();
     range_alloc_.reset();
+    cjk_roots_ = nullptr;
   }
 
   int find_first_char_range(const ObString &single_word, ObIFTDict *&dict) const;
+  void build_cjk_root_lookup();
+
+  struct CjkRoot
+  {
+    const ObIFTDict *dict_;
+    uint32_t base_idx_;
+    bool is_match_;
+    bool is_prefix_;
+  };
 
 private:
   static constexpr int DEFAULT_KEY_PER_RANGE = 50000; // by estimated
@@ -107,6 +117,7 @@ private:
   ObArenaAllocator range_alloc_;
   ObVector<ObFTRange, ObArenaAllocator> range_dicts_;
   ObFTCacheRangeContainer *range_container_; // only used to read cache
+  const CjkRoot *cjk_roots_;
 
 private:
   DISALLOW_COPY_AND_ASSIGN(ObFTRangeDict);

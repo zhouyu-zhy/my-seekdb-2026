@@ -323,8 +323,10 @@ int ObFTRangeDict::init()
     ret = OB_INIT_TWICE;
   } else {
     if (OB_FAIL(build_dict_from_cache(*range_container_))) {
+    } else {
+      build_cjk_root_lookup();
+      is_inited_ = true;
     }
-    is_inited_ = true;
   }
   return ret;
 }
@@ -348,9 +350,56 @@ int ObFTRangeDict::build_ranges(const ObFTDictDesc &desc,
   return ret;
 }
 
+void ObFTRangeDict::build_cjk_root_lookup()
+{
+  // Only the main IK dictionary needs this table. A quantifier match and
+  // characters outside this block continue to use the ordinary trie lookup.
+  if (desc_.type_ == ObFTDictType::DICT_IK_MAIN && desc_.charset_ == CHARSET_UTF8MB4) {
+    void *buf = range_alloc_.alloc(FTS_CJK_COUNT * sizeof(CjkRoot));
+    if (buf != nullptr) {
+      auto *roots = new (buf) CjkRoot[FTS_CJK_COUNT];
+      int ret = OB_SUCCESS;
+      for (uint32_t cp = FTS_CJK_FIRST; OB_SUCC(ret) && cp < FTS_CJK_END; ++cp) {
+        const char utf8[] = {static_cast<char>(0xE0 | (cp >> 12)),
+                             static_cast<char>(0x80 | ((cp >> 6) & 0x3F)),
+                             static_cast<char>(0x80 | (cp & 0x3F))};
+        ObDATrieHit root(nullptr, 0);
+        if (OB_FAIL(match(ObString(sizeof(utf8), utf8), root))) {
+        } else {
+          roots[cp - FTS_CJK_FIRST] = {root.dict_, root.base_idx_, root.is_match(), root.is_prefix()};
+        }
+      }
+      if (OB_SUCC(ret)) {
+        cjk_roots_ = roots;
+      }
+    }
+  }
+}
+
 int ObFTRangeDict::match(const ObString &single_word, ObDATrieHit &hit) const
 {
   int ret = OB_SUCCESS;
+  const int32_t index = cjk_roots_ != nullptr && hit.base_idx_ == 0 ? utf8_cjk_index(single_word) : -1;
+  if (index >= 0) {
+    const CjkRoot &root = cjk_roots_[index];
+    hit.set_unmatch();
+    if (root.dict_ != nullptr) {
+      hit.dict_ = root.dict_;
+    }
+    if (root.is_prefix_) {
+      hit.set_prefix();
+    }
+    if (root.is_match_) {
+      hit.set_match();
+    }
+    if (root.is_match_ || root.is_prefix_) {
+      hit.base_idx_ = root.base_idx_;
+      hit.end_pos_ += single_word.length();
+      ++hit.char_cnt_;
+    }
+    return OB_SUCCESS;
+  }
+
   ObIFTDict *dict = nullptr;
   if (OB_FAIL(find_first_char_range(single_word, dict)) && OB_ENTRY_NOT_EXIST != ret) {
   } else if (OB_ENTRY_NOT_EXIST == ret) {
@@ -433,6 +482,9 @@ int ObFTRangeDict::build_dict_from_cache(const ObFTCacheRangeContainer &range_co
     if (OB_ISNULL(dict = OB_NEWx(ObFTCacheDict, &range_alloc_, ObCollationType::CS_TYPE_UTF8MB4_BIN, dat))) {
       ret = OB_ALLOCATE_MEMORY_FAILED;
     } else {
+      if (desc_.type_ == ObFTDictType::DICT_IK_MAIN && desc_.charset_ == CHARSET_UTF8MB4) {
+        dict->build_cjk_code_lookup(range_alloc_);
+      }
       ObFTRange range;
       range.start_key_ = ft_character_order_key(dat->start_word_.get_word());
       range.end_key_ = ft_character_order_key(dat->end_word_.get_word());

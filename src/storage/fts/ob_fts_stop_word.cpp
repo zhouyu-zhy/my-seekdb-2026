@@ -212,9 +212,15 @@ int ObAddWord::casedown_word(const ObFTWord &src, ObFTWord &dst)
         need_lower = true;
       }
     }
-    if ((ascii_only && !need_lower)
-        || (!ascii_only && ft_is_lowercase_utf8_cjk(src_str, word_meta_.get_collation_type()))) {
+    if (ascii_only && !need_lower) {
       dst = src;
+    } else if (!ascii_only && ft_is_lowercase_utf8_cjk(src_str, word_meta_.get_collation_type())) {
+      // Posting rows can outlive the buffer used to materialize an out-of-row LOB.
+      ObString stable_text;
+      if (OB_FAIL(ob_write_string(allocator_, src_str, stable_text))) {
+      } else {
+        dst = ObFTWord(stable_text.length(), stable_text.ptr(), word_meta_);
+      }
     } else if (ascii_only) {
       char *buf = static_cast<char *>(allocator_.alloc(src_str.length()));
       if (OB_ISNULL(buf)) {

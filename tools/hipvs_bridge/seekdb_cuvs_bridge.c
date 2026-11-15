@@ -8,6 +8,7 @@
 #else
 #include <cuda_runtime.h>
 #endif
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -52,15 +53,36 @@ int seekdb_cuvs_search(void* handle, const float* query, long nq, long topk,
                        unsigned int* out_ids, float* out_dist)
 {
   sk_cuvs_index* h = (sk_cuvs_index*)handle;
-  if (!h) return 1;
+  if (!h || !query || !out_ids || nq <= 0 || topk <= 0 || h->dim <= 0) return 1;
+
+  // Retain the alignment of separate device allocations for each tensor.
+  const size_t alignment = 256;
+  if ((size_t)nq > (SIZE_MAX - alignment) / sizeof(float) / (size_t)h->dim ||
+      (size_t)nq > (SIZE_MAX - alignment) / sizeof(unsigned) / (size_t)topk ||
+      (size_t)nq > SIZE_MAX / sizeof(float) / (size_t)topk) return 1;
+  const size_t query_bytes = sizeof(float) * (size_t)nq * (size_t)h->dim;
+  const size_t id_bytes = sizeof(unsigned) * (size_t)nq * (size_t)topk;
+  const size_t distance_bytes = sizeof(float) * (size_t)nq * (size_t)topk;
+  const size_t ids_offset = (query_bytes + alignment - 1) & ~(alignment - 1);
+  const size_t ids_span = (id_bytes + alignment - 1) & ~(alignment - 1);
+  if (ids_offset > SIZE_MAX - ids_span ||
+      ids_offset + ids_span > SIZE_MAX - distance_bytes) return 1;
+  const size_t distances_offset = ids_offset + ids_span;
+  const size_t scratch_bytes = distances_offset + distance_bytes;
+
   int rc = 0;
-  float* qd = 0; unsigned* nd = 0; float* dd = 0; cuvsCagraSearchParams_t sp = 0;
-  if (cuvsRMMAlloc(h->res, (void**)&qd, sizeof(float)*nq*h->dim)  != CUVS_SUCCESS) { rc=10; goto done; }
-  if (cuvsRMMAlloc(h->res, (void**)&nd, sizeof(unsigned)*nq*topk) != CUVS_SUCCESS) { rc=11; goto done; }
-  if (cuvsRMMAlloc(h->res, (void**)&dd, sizeof(float)*nq*topk)    != CUVS_SUCCESS) { rc=12; goto done; }
-  if (cudaMemcpy(qd, query, sizeof(float)*nq*h->dim, cudaMemcpyDefault) != cudaSuccess) { rc=13; goto done; }
+  unsigned char* scratch = NULL;
+  if (cuvsRMMAlloc(h->res, (void**)&scratch, scratch_bytes) != CUVS_SUCCESS) {
+    fprintf(stderr, "[seekdb_cuvs] search scratch allocation failed: %s\n", cuvsGetLastErrorText());
+    return 10;
+  }
+  float* qd = (float*)scratch;
+  unsigned* nd = (unsigned*)(scratch + ids_offset);
+  float* dd = (float*)(scratch + distances_offset);
+  cuvsCagraSearchParams_t sp = 0;
+  if (cudaMemcpy(qd, query, query_bytes, cudaMemcpyDefault) != cudaSuccess) { rc=13; goto done; }
   {
-    DLManagedTensor qt, nt, dt; long qs[2]={nq,h->dim}, nsh[2]={nq,topk}, dsh[2]={nq,topk};
+    DLManagedTensor qt = {0}, nt, dt; long qs[2]={nq,h->dim}, nsh[2]={nq,topk}, dsh[2]={nq,topk};
     qt.dl_tensor.data=qd; qt.dl_tensor.device.device_type=kDLCUDA; qt.dl_tensor.device.device_id=0;
     qt.dl_tensor.ndim=2; qt.dl_tensor.dtype.code=kDLFloat; qt.dl_tensor.dtype.bits=32; qt.dl_tensor.dtype.lanes=1;
     qt.dl_tensor.shape=qs; qt.dl_tensor.strides=0; qt.dl_tensor.byte_offset=0;
@@ -75,17 +97,15 @@ int seekdb_cuvs_search(void* handle, const float* query, long nq, long topk,
     }
     cuvsFilter f; f.type=NO_FILTER; f.addr=(uintptr_t)0;
     if (cuvsCagraSearch(h->res, sp, h->idx, &qt, &nt, &dt, f) != CUVS_SUCCESS) { rc=15; goto done; }
-    if (cudaMemcpy(out_ids, nd, sizeof(unsigned)*nq*topk, cudaMemcpyDefault) != cudaSuccess) { rc=16; goto done; }
-    if (out_dist && cudaMemcpy(out_dist, dd, sizeof(float)*nq*topk, cudaMemcpyDefault) != cudaSuccess) {
+    if (cudaMemcpy(out_ids, nd, id_bytes, cudaMemcpyDefault) != cudaSuccess) { rc=16; goto done; }
+    if (out_dist && cudaMemcpy(out_dist, dd, distance_bytes, cudaMemcpyDefault) != cudaSuccess) {
       rc = 17;
       goto done;
     }
   }
 done:
   if (sp) cuvsCagraSearchParamsDestroy(sp);
-  if (dd) cuvsRMMFree(h->res, dd, sizeof(float)*nq*topk);
-  if (nd) cuvsRMMFree(h->res, nd, sizeof(unsigned)*nq*topk);
-  if (qd) cuvsRMMFree(h->res, qd, sizeof(float)*nq*h->dim);
+  cuvsRMMFree(h->res, scratch, scratch_bytes);
   if (rc) fprintf(stderr, "[seekdb_cuvs] search rc=%d: %s\n", rc, cuvsGetLastErrorText());
   return rc;
 }
@@ -95,7 +115,7 @@ void seekdb_cuvs_free(void* handle)
   sk_cuvs_index* h = (sk_cuvs_index*)handle;
   if (!h) return;
   cuvsCagraIndexDestroy(h->idx);
-  if (h->ip) cuvsCagraIndexParamsDestroy(h->ip);
+  cuvsCagraIndexParamsDestroy(h->ip);
   cuvsResourcesDestroy(h->res);
   free(h);
 }
@@ -142,76 +162,6 @@ fail_res:
   cuvsResourcesDestroy(index->res);
 fail:
   fprintf(stderr, "[seekdb_cuvs] deserialize failed: %s\n", cuvsGetLastErrorText());
-  free(index);
-  return NULL;
-}
-
-uint32_t* seekdb_cuvs_export_graph(void* handle, int32_t* degree)
-{
-  sk_cuvs_index* index = (sk_cuvs_index*)handle;
-  if (!index || !degree) return NULL;
-  *degree = 0;
-  DLManagedTensor graph = {0};
-  if (cuvsCagraIndexGetGraph(index->idx, &graph) != CUVS_SUCCESS) return NULL;
-  const DLTensor* view = &graph.dl_tensor;
-  uint32_t* rows = NULL;
-  if (view->data && view->shape && view->ndim == 2 && view->shape[0] == index->n &&
-      view->shape[1] > 0 && view->shape[1] < index->n && view->shape[1] <= INT32_MAX &&
-      view->dtype.code == kDLUInt && view->dtype.bits == 32 && view->dtype.lanes == 1 &&
-      view->byte_offset == 0 &&
-      (!view->strides || (view->strides[0] == view->shape[1] && view->strides[1] == 1)) &&
-      (size_t)index->n <= SIZE_MAX / sizeof(uint32_t) / (size_t)view->shape[1]) {
-    const size_t bytes = (size_t)index->n * (size_t)view->shape[1] * sizeof(uint32_t);
-    rows = (uint32_t*)malloc(bytes);
-    if (rows && cuvsStreamSync(index->res) == CUVS_SUCCESS &&
-        cudaMemcpy(rows, view->data, bytes, cudaMemcpyDefault) == cudaSuccess) {
-      *degree = (int32_t)view->shape[1];
-    } else {
-      free(rows);
-      rows = NULL;
-    }
-  }
-  if (graph.deleter) graph.deleter(&graph);
-  return rows;
-}
-
-void* seekdb_cuvs_restore_graph(const float* base, const uint32_t* graph,
-                               long n, long dim, int32_t degree)
-{
-  if (!base || !graph || n <= 0 || n > UINT32_MAX || dim <= 0 || degree <= 0 || degree >= n ||
-      (size_t)n > SIZE_MAX / sizeof(float) / (size_t)dim ||
-      (size_t)n > SIZE_MAX / sizeof(uint32_t) / (size_t)degree) return NULL;
-  sk_cuvs_index* index = (sk_cuvs_index*)calloc(1, sizeof(*index));
-  if (!index) return NULL;
-  if (cuvsResourcesCreate(&index->res) != CUVS_SUCCESS) goto fail;
-  if (cuvsCagraIndexCreate(&index->idx) != CUVS_SUCCESS) goto fail_res;
-  {
-    int64_t dataset_shape[2] = {n, dim};
-    int64_t graph_shape[2] = {n, degree};
-    DLManagedTensor dataset = {0}, adjacency = {0};
-    dataset.dl_tensor.data = (void*)base;
-    dataset.dl_tensor.device.device_type = kDLCPU;
-    dataset.dl_tensor.ndim = 2;
-    dataset.dl_tensor.dtype.code = kDLFloat;
-    dataset.dl_tensor.dtype.bits = 32;
-    dataset.dl_tensor.dtype.lanes = 1;
-    dataset.dl_tensor.shape = dataset_shape;
-    adjacency.dl_tensor = dataset.dl_tensor;
-    adjacency.dl_tensor.data = (void*)graph;
-    adjacency.dl_tensor.dtype.code = kDLUInt;
-    adjacency.dl_tensor.shape = graph_shape;
-    if (cuvsCagraIndexFromArgs(index->res, L2Expanded, &adjacency, &dataset, index->idx) != CUVS_SUCCESS ||
-        cuvsStreamSync(index->res) != CUVS_SUCCESS) goto fail_idx;
-  }
-  index->n = n;
-  index->dim = dim;
-  return index;
-fail_idx:
-  cuvsCagraIndexDestroy(index->idx);
-fail_res:
-  cuvsResourcesDestroy(index->res);
-fail:
-  fprintf(stderr, "[seekdb_cuvs] graph restore failed: %s\n", cuvsGetLastErrorText());
   free(index);
   return NULL;
 }

@@ -1,6 +1,5 @@
 #ifndef SEEKDB_CUVS_BRIDGE_H
 #define SEEKDB_CUVS_BRIDGE_H
-#include <stdint.h>
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -26,13 +25,6 @@ int   seekdb_cuvs_search(void* handle, const float* query, long nq, long topk,
 void  seekdb_cuvs_free(void* handle);
 int seekdb_cuvs_serialize(void* handle, const char* filename);
 void* seekdb_cuvs_deserialize(const char* filename, long n, long dim);
-/* Export the existing GPU graph as row-major uint32 offsets. The caller owns
- * the returned host buffer and releases it with free(). */
-uint32_t* seekdb_cuvs_export_graph(void* handle, int32_t* degree);
-/* Restore that graph with its original row-major FP32 dataset. Both input
- * buffers may be released after the call returns. */
-void* seekdb_cuvs_restore_graph(const float* base, const uint32_t* graph,
-                               long n, long dim, int32_t degree);
 #ifdef __cplusplus
 }
 #endif

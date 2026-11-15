@@ -1,3 +1,4 @@
+// [competition] ob_ft_dict_iterator.h
 
 /*
  * Copyright (c) 2025 OceanBase.

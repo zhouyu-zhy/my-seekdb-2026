@@ -1,3 +1,4 @@
+// [competition] ob_ik_utf8_dic_loader.h
 /*
  * Copyright (c) 2025 OceanBase.
  *

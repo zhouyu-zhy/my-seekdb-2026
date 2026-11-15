@@ -1,3 +1,4 @@
+// [competition] ob_gen_dic_loader.cpp
 /*
  * Copyright (c) 2025 OceanBase.
  *

@@ -1,3 +1,4 @@
+// [competition] ob_ft_dat_dict.h
 /*
  * Copyright (c) 2025 OceanBase.
  *

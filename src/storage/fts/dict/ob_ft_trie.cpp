@@ -1,3 +1,4 @@
+// [competition] ob_ft_trie.cpp
 /*
  * Copyright (c) 2025 OceanBase.
  *

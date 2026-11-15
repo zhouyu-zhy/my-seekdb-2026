@@ -1,3 +1,4 @@
+// [competition] ob_ft_char_utils.h
 /*
  * Copyright (c) 2025 OceanBase.
  *

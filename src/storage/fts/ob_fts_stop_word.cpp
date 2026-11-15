@@ -1,3 +1,4 @@
+// [competition] ob_fts_stop_word.cpp
 /*
  * Copyright (c) 2025 OceanBase.
  *

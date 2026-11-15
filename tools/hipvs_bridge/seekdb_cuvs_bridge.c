@@ -22,9 +22,9 @@
 #define SK_IVF_MIN_N 4096
 /* Sampled quality gate for the fast path (see sk_build_ivf_graph). */
 #define SK_QCHECK_MIN 0.94
-#define SK_SAMPLE 1024
+#define SK_SAMPLE 256
 #define SK_EXACT_K 32
-#define SK_CHUNK 8192
+#define SK_CHUNK 2048
 
 typedef struct {
   cuvsResources_t        res;

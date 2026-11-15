@@ -12046,12 +12046,54 @@ int ObLogPlan::prepare_text_retrieval_scan(const ObIArray<ObRawExpr *> &scan_mat
     ObTextRetrievalInfo &tr_info = table_scan->get_text_retrieval_info();
     tr_info.match_expr_ = match_against;
     tr_info.pushdown_match_filter_ = match_pred;
+    // Natural-language postings have a positive contribution for each matching
+    // token. A sole WHERE use needs membership, without the numeric score.
+    const ObIArray<ObRawExpr *> &conditions = get_stmt()->get_condition_exprs();
+    if (!table_scan->is_vec_adaptive_scan() && !table_scan->is_vec_idx_scan_post_filter()
+        && get_stmt()->is_select_stmt()
+        && get_stmt()->get_table_size() == 1
+        && NATURAL_LANGUAGE_MODE == match_against->get_mode_flag()
+        && !match_against->is_es_match()
+        && conditions.count() == 1) {
+      ObRawExpr *predicate = conditions.at(0);
+      if (predicate == match_against
+          || (nullptr != predicate && T_OP_BOOL == predicate->get_expr_type()
+              && predicate->get_param_count() == 1 && predicate->get_param_expr(0) == match_against)) {
+        const auto *select_stmt = static_cast<const ObSelectStmt *>(get_stmt());
+        ObSEArray<ObRawExpr *, 16> expressions;
+        if (OB_FAIL(select_stmt->get_relation_exprs(expressions))) {
+        } else {
+          int64_t predicate_refs = 0;
+          bool score_used = false;
+          for (int64_t i = 0; !score_used && i < expressions.count(); ++i) {
+            const ObRawExpr *expr = expressions.at(i);
+            if (expr == predicate) {
+              ++predicate_refs;
+            } else if (nullptr != expr && (expr->is_match_against_expr() || expr->has_flag(CNT_MATCH_EXPR))) {
+              score_used = true;
+            }
+          }
+          // Check projections separately in case a clause reuses a deduplicated root.
+          for (int64_t i = 0; !score_used && i < select_stmt->get_select_items().count(); ++i) {
+            const SelectItem &item = select_stmt->get_select_items().at(i);
+            if (nullptr != item.expr_
+                && (item.expr_->is_match_against_expr() || item.expr_->has_flag(CNT_MATCH_EXPR))) {
+              score_used = true;
+            }
+          }
+          if (!score_used && predicate_refs == 1 && !select_stmt->has_order_by()
+              && select_stmt->get_group_exprs().empty() && select_stmt->get_having_exprs().empty()) {
+            tr_info.need_calc_relevance_ = false;
+          }
+        }
+      }
+    }
     // The mapping table is absent when the data-table rowkey is used as the document ID.
     table_scan->set_doc_id_index_table_id(tr_info.doc_id_idx_tid_);
     if (table_scan->is_vec_adaptive_scan() || table_scan->is_vec_idx_scan_post_filter()) {
       table_scan->set_rowkey_doc_table_id(tr_info.rowkey_idx_tid_);
     }
-    if (OB_FAIL(table_scan->set_is_skip_rowkey_doc(tr_info.doc_id_idx_tid_ == OB_INVALID_ID))) {
+    if (FAILEDx(table_scan->set_is_skip_rowkey_doc(tr_info.doc_id_idx_tid_ == OB_INVALID_ID))) {
     } else if (OB_FAIL(table_scan->set_is_skip_rowkey_doc(tr_info.rowkey_idx_tid_ == OB_INVALID_ID))) {
     }
   }
@@ -12190,8 +12232,6 @@ int ObLogPlan::prepare_text_retrieval_info(const uint64_t ref_table_id,
   uint64_t fwd_idx_tid = OB_INVALID_ID;
   uint64_t inv_idx_tid = OB_INVALID_ID;
   ObSEArray<ObAuxTableMetaInfo, 4> index_infos;
-  bool need_calc_relevance = true;
-  ObSEArray<ObExprConstraint, 2> constraints;
   uint64_t docid_col_id = OB_INVALID_ID;
   if (OB_ISNULL(match_against) || OB_ISNULL(get_stmt()) || OB_ISNULL(get_optimizer_context().get_query_ctx())) {
     ret = OB_INVALID_ARGUMENT;
@@ -12258,18 +12298,6 @@ int ObLogPlan::prepare_text_retrieval_info(const uint64_t ref_table_id,
     }
   }
   if (OB_SUCC(ret)) {
-    /*
-    if (OB_FAIL(ObTransformUtils::check_need_calc_match_score(get_optimizer_context().get_exec_ctx(),
-                                                              get_stmt(),
-                                                              match_against,
-                                                              need_calc_relevance,
-                                                              constraints))) {
-      LOG_WARN("failed to check need calc relevance", K(ret));
-    } else if (!need_calc_relevance &&
-               OB_FAIL(append_array_no_dup(get_optimizer_context().get_query_ctx()->all_expr_constraints_, constraints))) {
-      LOG_WARN("failed to append array no dup", K(ret));
-    }
-    */
     tr_info.match_expr_ = match_against;
     tr_info.inv_idx_tid_ = inv_idx_tid;
     tr_info.fwd_idx_tid_ = fwd_idx_tid;
@@ -12277,7 +12305,7 @@ int ObLogPlan::prepare_text_retrieval_info(const uint64_t ref_table_id,
     tr_info.rowkey_idx_tid_ = rowkey_doc_tid;
     tr_info.data_table_id_ = ref_table_id;
     tr_info.pushdown_match_filter_ = nullptr;
-    tr_info.need_calc_relevance_ = need_calc_relevance;
+    tr_info.need_calc_relevance_ = true;
   }
   return ret;
 }

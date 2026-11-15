@@ -203,7 +203,8 @@ int ObTextRetrievalTokenIter::get_next_row()
   int ret = OB_SUCCESS;
   if (IS_NOT_INIT) {
     ret = OB_NOT_INIT;
-  } else if (!token_doc_cnt_calculated_ && OB_FAIL(estimate_token_doc_cnt())) {
+  } else if (need_calc_relevance() && !token_doc_cnt_calculated_
+             && OB_FAIL(estimate_token_doc_cnt())) {
   } else if (OB_FAIL(query::das_scan_next_row(inv_idx_scan_iter_))) {
     if (OB_UNLIKELY(OB_ITER_END != ret)) {
     }
@@ -242,7 +243,8 @@ int ObTextRetrievalTokenIter::get_next_batch(const int64_t capacity, int64_t &co
   count = 0;
   if (IS_NOT_INIT) {
     ret = OB_NOT_INIT;
-  } else if (!token_doc_cnt_calculated_ && OB_FAIL(estimate_token_doc_cnt())) {
+  } else if (need_calc_relevance() && !token_doc_cnt_calculated_
+             && OB_FAIL(estimate_token_doc_cnt())) {
   } else if (OB_FAIL(query::das_scan_next_rows(
                  inv_idx_scan_iter_, count, OB_MIN(max_batch_size_, capacity)))) {
     if (OB_UNLIKELY(OB_ITER_END != ret)) {
@@ -302,10 +304,11 @@ int ObTextRetrievalTokenIter::advance_to(const ObDatum &id_datum)
 int ObTextRetrievalTokenIter::update_scan_param(const ObString &token, common::ObArenaAllocator &allocator)
 {
   int ret = OB_SUCCESS;
-  if (OB_UNLIKELY(inv_idx_agg_param_->key_ranges_.count() != 1)) {
+  const ObTableScanParam *range_param = need_inv_idx_agg() ? inv_idx_agg_param_ : inv_idx_scan_param_;
+  if (OB_UNLIKELY(range_param->key_ranges_.count() != 1)) {
     ret = OB_ERR_UNEXPECTED;
   } else {
-    ObNewRange scan_range = inv_idx_agg_param_->key_ranges_.at(0);
+    ObNewRange scan_range = range_param->key_ranges_.at(0);
     ObObj tmp_obj;
     tmp_obj.set_string(ObVarcharType, token);
     tmp_obj.set_meta_type(scan_range.start_key_.get_obj_ptr()->meta_);
@@ -476,7 +479,12 @@ int ObTextRetrievalDaaTTokenIter::get_next_row() {
   } else if (!eval_ctx_->is_vectorized() && (OB_FAIL(token_iter_->get_next_row()))) {
     if (OB_UNLIKELY(OB_ITER_END != ret)) {
     }
-  } else if (!eval_ctx_->is_vectorized() && FALSE_IT(count_ = 1)) {
+  } else if (!eval_ctx_->is_vectorized()) {
+    count_ = 1;
+    cur_idx_ = 0;
+    if (OB_ISNULL(relevance_expr_)) {
+      ret = doc_id_[0].from_datum(inv_scan_domain_id_col_->locate_expr_datum(*eval_ctx_));
+    }
   } else if (eval_ctx_->is_vectorized() && OB_FAIL(token_iter_->get_next_batch(max_batch_size_, count_))) {
     if (OB_UNLIKELY(OB_ITER_END != ret)) {
     } else if (count_ != 0) {
@@ -526,9 +534,7 @@ int ObTextRetrievalDaaTTokenIter::save_docids()
     cur_idx_ = 0;
     const ObDatumVector &doc_id_datum = inv_scan_domain_id_col_->locate_expr_datumvector(*eval_ctx_);
     for (int64_t i = 0; OB_SUCC(ret) && i < count_; ++i) {
-      if (OB_LIKELY(!token_iter_->get_skip()->at(i))) {
-        if (OB_FAIL(doc_id_[i].from_datum(*doc_id_datum.at(i)))) {
-        };
+      if (OB_FAIL(doc_id_[i].from_datum(*doc_id_datum.at(i)))) {
       }
     }
   }

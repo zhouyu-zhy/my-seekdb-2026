@@ -1364,7 +1364,9 @@ int ObDASTRTaatIter::inner_load_next_hashmap()
         } else if (OB_FAIL(map->set_refactored(doc_id, cur_relevance + last_relevance, 1/*overwrite*/))) {
         }
       } else {
-        if (OB_FAIL(map->set_refactored(doc_id, 1, 0/*overwrite*/))) {
+        // Multiple terms can contribute the same document to the union.
+        if (OB_HASH_EXIST == (ret = map->set_refactored(doc_id, 1))) {
+          ret = OB_SUCCESS;
         }
       }
     }

@@ -18,6 +18,7 @@
 #define USING_LOG_PREFIX STORAGE_FTS
 
 #include "storage/fts/ob_beng_ft_parser.h"
+#include "lib/charset/ob_ctype.h"
 #include "data_plane/fts/ob_fts_struct.h"
 
 using namespace oceanbase::common;
@@ -43,6 +44,8 @@ int ObBEngFTParser::get_next_token(
   word_freq = 0;
   if (OB_UNLIKELY(!is_inited_)) {
     ret = OB_NOT_INIT;
+  } else if (ascii_cursor_ >= 0) {
+    ret = next_ascii_token(word, word_len, char_len, word_freq);
   } else if (OB_ISNULL(token_stream_)) {
     ret = OB_ERR_UNEXPECTED;
   } else if (OB_FAIL(token_stream_->get_next(token, token_freq))) {
@@ -69,6 +72,47 @@ int ObBEngFTParser::get_next_token(
   return ret;
 }
 
+int ObBEngFTParser::next_ascii_token(
+    const char *&word, int64_t &word_len, int64_t &char_len, int64_t &word_freq)
+{
+  constexpr unsigned int delimiter = _MY_SPC | _MY_CTR | _MY_PNT;
+  constexpr unsigned int alnum = _MY_U | _MY_L | _MY_NMR;
+  const auto *text = reinterpret_cast<const unsigned char *>(doc_.ptr_);
+  const auto *ctype = analysis_ctx_.cs_->ctype + 1;
+  const int64_t size = doc_.len_;
+  while (ascii_cursor_ < size) {
+    // Delimiters and edge trimming follow the original tokenizer/normalizer.
+    int64_t begin = ascii_cursor_;
+    while (ascii_cursor_ < size && !(ctype[text[ascii_cursor_]] & delimiter)) {
+      ++ascii_cursor_;
+    }
+    int64_t end = ascii_cursor_;
+    if (ascii_cursor_ < size) {
+      ++ascii_cursor_;
+    }
+    while (begin < end && !(ctype[text[begin]] & alnum)) {
+      ++begin;
+    }
+    while (end > begin && !(ctype[text[end - 1]] & alnum)) {
+      --end;
+    }
+    if (begin < end) {
+      char *output = copy_buf_ + copy_pos_;
+      for (int64_t i = begin; i < end; ++i) {
+        const unsigned char byte = text[i];
+        output[i - begin] = static_cast<char>('A' <= byte && byte <= 'Z' ? byte + ('a' - 'A') : byte);
+      }
+      word = output;
+      word_len = end - begin;
+      char_len = word_len;
+      word_freq = 1;
+      copy_pos_ += word_len;
+      return OB_SUCCESS;
+    }
+  }
+  return OB_ITER_END;
+}
+
 int ObBEngFTParser::init(ObFTParserParam *param)
 {
   int ret = OB_SUCCESS;
@@ -89,7 +133,15 @@ int ObBEngFTParser::init(ObFTParserParam *param)
     analysis_ctx_.cs_ = param->cs_;
     analysis_ctx_.filter_stopword_ = false;
     analysis_ctx_.need_grouping_ = false;
-    if (OB_FAIL(english_analyzer_.init(analysis_ctx_, *param->allocator_))) {
+    bool ascii = copy_buf_ != nullptr && param->cs_->cset == &ob_charset_utf8mb4_handler
+        && param->cs_->ctype != nullptr && param->cs_->caseinfo == &ob_unicase_default;
+    for (int64_t i = 0; ascii && i < param->ft_length_; ++i) {
+      ascii = static_cast<unsigned char>(param->fulltext_[i]) < 0x80;
+    }
+    if (ascii) {
+      ascii_cursor_ = 0;
+      is_inited_ = true;
+    } else if (OB_FAIL(english_analyzer_.init(analysis_ctx_, *param->allocator_))) {
     } else if (OB_FAIL(segment(doc_, token_stream_))) {
     } else if (OB_ISNULL(token_stream_)) {
       ret = OB_ERR_UNEXPECTED;
@@ -126,6 +178,7 @@ void ObBEngFTParser::reset()
   copy_buf_ = nullptr;
   copy_cap_ = 0;
   copy_pos_ = 0;
+  ascii_cursor_ = -1;
   is_inited_ = false;
 }
 

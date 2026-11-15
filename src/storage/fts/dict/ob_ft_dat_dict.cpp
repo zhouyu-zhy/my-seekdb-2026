@@ -300,18 +300,29 @@ template class ObFTDATReader<void>;
 
 ObArrayHashMap *ObFTDAT::get_map() { return reinterpret_cast<ObArrayHashMap *>(buff); }
 
+namespace
+{
+inline uint32_t ft_dictionary_bucket(uint64_t hash, uint32_t capacity)
+{
+  // Multiply-high maps the full hash range to [0, capacity) without division.
+  return static_cast<uint32_t>((static_cast<__uint128_t>(hash) * capacity) >> 64);
+}
+} // namespace
+
 int ObArrayHashMap::find(const ObFTSingleWord &word, ObFTWordCode &code) const
 {
   int ret = OB_ENTRY_NOT_EXIST;
   uint64_t hash = word.get_word().hash();
-  uint64_t index = hash % header_.capacity_;
+  uint32_t index = ft_dictionary_bucket(hash, header_.capacity_);
   while (header_.data[index].used) {
     if (header_.data[index].word == word) {
       code = header_.data[index].code;
       ret = OB_SUCCESS;
       break;
     } else {
-      index = (index + 3) % header_.capacity_;
+      if (++index == header_.capacity_) {
+        index = 0;
+      }
     }
   }
   return ret;
@@ -321,9 +332,11 @@ int ObArrayHashMap::insert(const ObString &key, ObFTWordCode code)
 {
   int ret = OB_SUCCESS;
   uint64_t hash = key.hash();
-  uint64_t index = hash % header_.capacity_;
+  uint32_t index = ft_dictionary_bucket(hash, header_.capacity_);
   while (header_.data[index].used) {
-    index = (index + 3) % header_.capacity_;
+    if (++index == header_.capacity_) {
+      index = 0;
+    }
   }
 
   header_.data[index].code = code;

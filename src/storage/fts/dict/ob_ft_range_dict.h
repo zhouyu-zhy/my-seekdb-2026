@@ -48,8 +48,8 @@ public:
 public:
   struct ObFTRange final
   {
-    ObFTSingleWord start_;
-    ObFTSingleWord end_;
+    uint64_t start_key_;
+    uint64_t end_key_;
     ObIFTDict *dict_; // a cache dict
   };
 

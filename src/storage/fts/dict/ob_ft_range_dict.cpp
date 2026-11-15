@@ -47,25 +47,16 @@ namespace storage
 
 namespace
 {
-// Fast equivalent of ObCharset::strcmp(CS_TYPE_UTF8MB4_BIN, lhs, rhs): byte
-// order comparison with a length tie-break. The range boundaries of the fts
-// dictionaries are always compared in the binary collation, and this helper is
-// used on the per-character tokenize hot path where the generic charset
-// comparison (charset dispatch + per-character utf8 comparison) is far too
-// heavy.
-inline int fts_binary_strcmp(const ObString &lhs, const ObString &rhs)
+// The high bytes preserve binary string order. Including the length as
+// the last byte also orders prefixes correctly when the suffix contains NUL.
+inline uint64_t ft_character_order_key(const ObString &word)
 {
-  const int64_t lhs_len = lhs.length();
-  const int64_t rhs_len = rhs.length();
-  const int64_t cmp_len = lhs_len < rhs_len ? lhs_len : rhs_len;
-  int cmp = 0;
-  if (cmp_len > 0) {
-    cmp = memcmp(lhs.ptr(), rhs.ptr(), static_cast<size_t>(cmp_len));
+  static_assert(ObCharset::MAX_MB_LEN < sizeof(uint64_t), "room for character length");
+  uint64_t key = word.length();
+  for (int64_t i = 0; i < word.length(); ++i) {
+    key |= uint64_t{static_cast<unsigned char>(word.ptr()[i])} << (56 - i * 8);
   }
-  if (0 == cmp) {
-    cmp = lhs_len < rhs_len ? -1 : (lhs_len > rhs_len ? 1 : 0);
-  }
-  return cmp < 0 ? -1 : (cmp > 0 ? 1 : 0);
+  return key;
 }
 } // anonymous namespace
 
@@ -406,25 +397,26 @@ int ObFTRangeDict::match_with_hit(const ObString &single_word,
 int ObFTRangeDict::find_first_char_range(const ObString &single_word, ObIFTDict *&dict) const
 {
   int ret = OB_SUCCESS;
-  // Ranges are ordered by start word. Binary search the last range whose start
-  // is <= the input word, then confirm the word does not exceed that range end.
-  int64_t left = 0;
-  int64_t right = range_dicts_.size() - 1;
-  int64_t candidate = -1;
-  while (left <= right) {
-    const int64_t mid = left + (right - left) / 2;
-    if (fts_binary_strcmp(range_dicts_[mid].start_.get_word(), single_word) <= 0) {
-      candidate = mid;
-      left = mid + 1;
-    } else {
-      right = mid - 1;
-    }
-  }
-  if (candidate < 0
-      || fts_binary_strcmp(range_dicts_[candidate].end_.get_word(), single_word) < 0) {
+  if (OB_UNLIKELY(single_word.empty() || single_word.length() > ObCharset::MAX_MB_LEN)) {
     ret = OB_ENTRY_NOT_EXIST;
   } else {
-    dict = range_dicts_[candidate].dict_;
+    const uint64_t key = ft_character_order_key(single_word);
+    // Find the last range whose start is <= the input, then check its end.
+    int64_t left = 0;
+    int64_t right = range_dicts_.size();
+    while (left < right) {
+      const int64_t mid = left + (right - left) / 2;
+      if (range_dicts_[mid].start_key_ <= key) {
+        left = mid + 1;
+      } else {
+        right = mid;
+      }
+    }
+    if (left == 0 || key > range_dicts_[left - 1].end_key_) {
+      ret = OB_ENTRY_NOT_EXIST;
+    } else {
+      dict = range_dicts_[left - 1].dict_;
+    }
   }
   return ret;
 }
@@ -442,8 +434,8 @@ int ObFTRangeDict::build_dict_from_cache(const ObFTCacheRangeContainer &range_co
       ret = OB_ALLOCATE_MEMORY_FAILED;
     } else {
       ObFTRange range;
-      range.start_ = dat->start_word_;
-      range.end_ = dat->end_word_;
+      range.start_key_ = ft_character_order_key(dat->start_word_.get_word());
+      range.end_key_ = ft_character_order_key(dat->end_word_.get_word());
       range.dict_ = dict;
       if (OB_FAIL(range_dicts_.push_back(range))) {
       }

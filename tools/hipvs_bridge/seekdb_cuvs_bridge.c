@@ -20,6 +20,11 @@
  * graph quality at baseline level while roughly halving the build time. */
 #define SK_NN_ITER 50
 #define SK_IVF_MIN_N 4096
+/* The fast path keeps one extra device copy of the dataset alive (cuVS builds
+ * the index over the buffers we hand it). Above this dimension that copy is
+ * large enough to push the VRAM peak past the baseline envelope, so wide
+ * vectors stay on the NN-descent path. */
+#define SK_IVF_MAX_DIM 160
 /* Sampled quality gate for the fast path (see sk_build_ivf_graph). */
 #define SK_QCHECK_MIN 0.94
 #define SK_SAMPLE 256
@@ -295,7 +300,8 @@ void* seekdb_cuvs_build(const float* base, long n, long dim)
   if (cuvsResourcesCreate(&h->res) != CUVS_SUCCESS) { free(h); return NULL; }
   if (cuvsCagraIndexParamsCreate(&h->ip) != CUVS_SUCCESS) goto fail_res;
 
-  if (n >= SK_IVF_MIN_N && dim > 0 && sk_build_ivf_graph(h, base, n, dim) == 0) {
+  if (n >= SK_IVF_MIN_N && dim > 0 && dim <= SK_IVF_MAX_DIM &&
+      sk_build_ivf_graph(h, base, n, dim) == 0) {
     h->n = n; h->dim = dim;
     return h;
   }

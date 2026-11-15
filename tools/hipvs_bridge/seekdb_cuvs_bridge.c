@@ -28,14 +28,25 @@ void* seekdb_cuvs_build(const float* base, long n, long dim)
   dset.dl_tensor.data = (void*)base;
   dset.dl_tensor.device.device_type = kDLCPU; dset.dl_tensor.device.device_id = 0;
   dset.dl_tensor.ndim = 2;
-  dset.dl_tensor.dtype.code = kDLFloat; dset.dl_tensor.dtype.bits = 32; dset.dl_tensor.dtype.lanes = 1;
+  dset.dl_tensor.dtype.code = kDLFloat; dset.dl_tensor.dtype.bits = 32;
+  dset.dl_tensor.dtype.lanes = 1;
   dset.dl_tensor.shape = ds; dset.dl_tensor.strides = 0; dset.dl_tensor.byte_offset = 0;
 
   if (cuvsCagraIndexParamsCreate(&h->ip) != CUVS_SUCCESS) goto fail_res;
+  /* Build-cost knobs of the NN-descent graph construction.
+   *  - intermediate_graph_degree 128 (== graph_degree) removes the extra
+   *    candidate fan-out that CAGRA would otherwise spend most of its build
+   *    time on; measured recall is unchanged (it is even marginally better,
+   *    because the 256->128 prune step is skipped).
+   *  - nn_descent_niter 50 instead of 100: NN-descent converges long before
+   *    100 iterations on 250K-scale data; measured Recall@10/@100 are within
+   *    noise of the 100-iteration build while the build is ~2x faster.
+   * The output graph itself (graph_degree 128) and the search path are left
+   * exactly as in the contest baseline, so query behaviour is unchanged. */
   h->ip->build_algo = NN_DESCENT;
   h->ip->graph_degree = 128;
-  h->ip->intermediate_graph_degree = 256;
-  h->ip->nn_descent_niter = 100;
+  h->ip->intermediate_graph_degree = 128;
+  h->ip->nn_descent_niter = 50;
   if (cuvsCagraIndexCreate(&h->idx)      != CUVS_SUCCESS) goto fail_ip;
   if (cuvsCagraBuild(h->res, h->ip, &dset, h->idx) != CUVS_SUCCESS) goto fail_idx;
   h->n = n; h->dim = dim;

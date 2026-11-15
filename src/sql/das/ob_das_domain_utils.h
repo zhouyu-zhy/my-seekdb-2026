@@ -23,7 +23,7 @@
 #include "sql/das/ob_das_dml_ctx_define.h"
 #include "data_plane/fts/ob_fts_parser_helper.h"
 #include "data_plane/fts/ob_fts_doc_word_scan.h"
-#include "data_plane/fts/ob_fts_parser_helper.h"
+#include "data_plane/blocksstable/ob_datum_row.h"
 #include "share/geo/ob_srs_provider.h"
 
 namespace oceanbase
@@ -46,16 +46,21 @@ public:
       const bool is_fts_index_aux,
       const common::ObString &parser_name,
       const common::ObString &parser_properties);
+  // The scan resets this arena before reading the next source document, after
+  // consuming every posting that can still refer to its materialized text.
+  common::ObIAllocator &document_allocator() { return merge_memctx_->get_arena_allocator(); }
   int segment(const common::ObObjMeta &ft_obj_meta, const ObDatum &doc_id, const common::ObString &fulltext);
   int get_next_row(blocksstable::ObDatumRow *&row);
   void reset();
   void reuse();
-  TO_STRING_KV(K_(row_idx), K_(is_fts_index_aux), K_(helper), K_(is_inited),
-               "row_count", rows_.count());
+  TO_STRING_KV(K_(is_fts_index_aux), K_(helper), K_(is_inited),
+               "word_count", words_.size());
 private:
   lib::MemoryContext merge_memctx_;
-  ObDomainIndexRow rows_;
-  uint64_t row_idx_;
+  storage::ObFTWordMap words_;
+  storage::ObFTWordMap::iterator next_word_;
+  blocksstable::ObDatumRow posting_;
+  int64_t doc_length_;
   bool is_fts_index_aux_;
   storage::ObFTParseHelper helper_;
   bool is_inited_;

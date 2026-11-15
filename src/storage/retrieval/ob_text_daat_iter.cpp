@@ -46,6 +46,8 @@ int ObTextDaaTIter::init(const ObTextDaaTParam &param)
         && !iter_param_->limit_param_->is_valid()
         && dim_iters_->count() > 0 && dim_iters_->count() <= 4
         && (binary_doc_ids_ || id_meta.type_ == common::ObUInt64Type);
+    skip_doc_id_projection_ = small_posting_union_ && param.skip_doc_id_projection_
+        && iter_param_->eval_ctx_->is_vectorized();
     if (small_posting_union_) {
       for (int64_t i = 0; i < dim_iters_->count(); ++i) {
         iter_domain_ids_[i] = nullptr;
@@ -149,9 +151,18 @@ int ObTextDaaTIter::do_one_merge_round(int64_t &count)
   if (OB_FAIL(ret)) {
   } else if (min_id == nullptr) {
     ret = OB_ITER_END;
+  } else if (skip_doc_id_projection_) {
+    ++count;
+    ++input_row_cnt_;
+    ++output_row_cnt_;
   } else if (OB_FAIL(cache_result(count, *min_id, 0.0))) {
   }
   return ret;
+}
+
+int ObTextDaaTIter::project_results(int64_t count)
+{
+  return skip_doc_id_projection_ ? OB_SUCCESS : ObSRDaaTIterImpl::project_results(count);
 }
 
 ObTextBMWIter::ObTextBMWIter()

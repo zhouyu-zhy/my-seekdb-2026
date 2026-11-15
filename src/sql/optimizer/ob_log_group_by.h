@@ -121,6 +121,8 @@ public:
   // Get the aggregate expressions
   inline common::ObIArray<ObRawExpr *> &get_aggr_funcs()
   { return aggr_exprs_; }
+  inline const common::ObIArray<ObRawExpr *> &get_aggr_funcs() const
+  { return aggr_exprs_; }
   inline bool has_rollup()
   { return rollup_exprs_.count() > 0; }
   inline void set_hash_type() { algo_ = HASH_AGGREGATE; }

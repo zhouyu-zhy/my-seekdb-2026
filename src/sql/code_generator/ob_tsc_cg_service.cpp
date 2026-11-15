@@ -18,6 +18,7 @@
 #include "ob_tsc_cg_service.h"
 #include "sql/code_generator/ob_static_engine_cg.h"
 #include "sql/engine/table/ob_table_scan_op.h"
+#include "sql/optimizer/ob_log_group_by.h"
 #include "query/vector/ob_vector_index_util.h"
 #include "sql/das/ob_domain_id.h"
 namespace oceanbase
@@ -1789,6 +1790,26 @@ int ObTscCgService::generate_vec_idx_ctdef(const ObLogTableScan &op,
   return ret;
 }
 
+namespace
+{
+bool is_scalar_match_count(const ObLogTableScan &scan)
+{
+  const ObLogicalOperator *parent = scan.get_parent();
+  if (parent == nullptr || parent->get_type() != log_op_def::LOG_GROUP_BY
+      || scan.get_index_back() || scan.get_is_index_global()
+      || !scan.get_output_exprs().empty() || !scan.get_filter_exprs().empty()) {
+    return false;
+  }
+  const auto &group = static_cast<const ObLogGroupBy &>(*parent);
+  const auto &aggrs = group.get_aggr_funcs();
+  if (group.get_algo() != SCALAR_AGGREGATE || aggrs.count() != 1
+      || aggrs.at(0)->get_expr_type() != T_FUN_COUNT) {
+    return false;
+  }
+  return static_cast<const ObAggFunRawExpr *>(aggrs.at(0))->get_real_param_count() == 0;
+}
+} // namespace
+
 int ObTscCgService::generate_text_ir_ctdef(const ObLogTableScan &op,
                                            const DASScanCGCtx &cg_ctx,
                                            ObTableScanCtDef &tsc_ctdef,
@@ -1913,6 +1934,12 @@ int ObTscCgService::generate_text_ir_ctdef(const ObLogTableScan &op,
         }
       }
       index_back_doc_id_column = ir_scan_ctdef->inv_scan_domain_id_col_;
+      // A local scalar COUNT(*) directly above the scan consumes batch sizes only.
+      ir_scan_ctdef->skip_doc_id_projection_ = !tr_info.need_calc_relevance_
+          && !tr_info.need_sort() && !cg_ctx.is_func_lookup_ && !cg_ctx.is_es_match_
+          && !cg_ctx.is_merge_fts_index_ && !cg_ctx.is_vec_iter_func_lookup_
+          && op.get_plan()->get_optimizer_context().get_phy_plan_type() == OB_PHY_PLAN_LOCAL
+          && is_scalar_match_count(op);
     }
   }
 

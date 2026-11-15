@@ -37,7 +37,7 @@ struct ObTextDaaTParam
   ObTextDaaTParam()
     : dim_iters_(nullptr), base_param_(nullptr), allocator_(nullptr), relevance_collector_(nullptr),
       bm25_param_est_ctx_(), mode_flag_(sql::ObMatchAgainstMode::NATURAL_LANGUAGE_MODE),
-      function_lookup_mode_(false), minimum_should_match_(0) {}
+      function_lookup_mode_(false), minimum_should_match_(0), skip_doc_id_projection_(false) {}
   ~ObTextDaaTParam() {}
   TO_STRING_KV(K_(base_param), KP_(dim_iters), K_(bm25_param_est_ctx),  K_(mode_flag), K_(function_lookup_mode));
   ObIArray<ObISRDaaTDimIter *> *dim_iters_;
@@ -48,6 +48,7 @@ struct ObTextDaaTParam
   sql::ObMatchAgainstMode mode_flag_;
   bool function_lookup_mode_;
   int64_t minimum_should_match_;
+  bool skip_doc_id_projection_;
 };
 
 class ObTextDaaTIter final : public ObSRDaaTIterImpl
@@ -56,7 +57,8 @@ public:
   ObTextDaaTIter() : ObSRDaaTIterImpl(),
       bm25_param_estimator_(),
       mode_flag_(sql::ObMatchAgainstMode::NATURAL_LANGUAGE_MODE),
-      function_lookup_mode_(false), small_posting_union_(false), binary_doc_ids_(false) {}
+      function_lookup_mode_(false), small_posting_union_(false), binary_doc_ids_(false),
+      skip_doc_id_projection_(false) {}
   virtual ~ObTextDaaTIter() { reset(); }
 
   int init(const ObTextDaaTParam &param);
@@ -65,12 +67,14 @@ public:
 protected:
   virtual int pre_process() override;
   virtual int do_one_merge_round(int64_t &count) override;
+  virtual int project_results(int64_t count) override;
 protected:
   ObBM25ParamEstimator bm25_param_estimator_;
   sql::ObMatchAgainstMode mode_flag_;
   bool function_lookup_mode_;
   bool small_posting_union_;
   bool binary_doc_ids_;
+  bool skip_doc_id_projection_;
 private:
   int compare_posting_ids(const ObDatum &left, const ObDatum &right) const;
   DISALLOW_COPY_AND_ASSIGN(ObTextDaaTIter);

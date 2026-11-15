@@ -35,6 +35,22 @@ int ObTextDaaTIter::init(const ObTextDaaTParam &param)
   } else {
     mode_flag_ = param.mode_flag_;
     function_lookup_mode_ = param.function_lookup_mode_;
+    const auto &id_meta = iter_param_->id_proj_expr_->datum_meta_;
+    binary_doc_ids_ = id_meta.type_ == common::ObVarcharType
+        && id_meta.cs_type_ == common::CS_TYPE_BINARY;
+    // A few sorted lists can be merged without a heap or relevance collector.
+    small_posting_union_ = mode_flag_ == sql::ObMatchAgainstMode::NATURAL_LANGUAGE_MODE
+        && !function_lookup_mode_ && param.minimum_should_match_ <= 1
+        && !iter_param_->need_project_relevance() && !iter_param_->need_filter()
+        && iter_param_->relevance_expr_ == nullptr && iter_param_->dim_weights_ == nullptr
+        && !iter_param_->limit_param_->is_valid()
+        && dim_iters_->count() > 0 && dim_iters_->count() <= 4
+        && (binary_doc_ids_ || id_meta.type_ == common::ObUInt64Type);
+    if (small_posting_union_) {
+      for (int64_t i = 0; i < dim_iters_->count(); ++i) {
+        iter_domain_ids_[i] = nullptr;
+      }
+    }
   }
   return ret;
 }
@@ -64,6 +80,11 @@ void ObTextDaaTIter::reuse(const bool switch_tablet)
     }
   }
   ObSRDaaTIterImpl::reuse(switch_tablet);
+  if (small_posting_union_) {
+    for (int64_t i = 0; i < dim_iters_->count(); ++i) {
+      iter_domain_ids_[i] = nullptr;
+    }
+  }
 }
 
 int ObTextDaaTIter::pre_process()
@@ -74,6 +95,61 @@ int ObTextDaaTIter::pre_process()
   } else if (iter_param_->need_project_relevance()) {
     if (OB_FAIL(bm25_param_estimator_.do_estimation(*iter_param_->eval_ctx_))) {
     }
+  }
+  return ret;
+}
+
+int ObTextDaaTIter::compare_posting_ids(const ObDatum &left, const ObDatum &right) const
+{
+  if (!binary_doc_ids_) {
+    return left.get_uint() < right.get_uint() ? -1 : (left.get_uint() > right.get_uint());
+  }
+  // Same byte ordering as the binary VARCHAR comparator, including a length tie-break.
+  const int cmp = MEMCMP(left.ptr_, right.ptr_, MIN(left.len_, right.len_));
+  return cmp == 0 ? (left.len_ < right.len_ ? -1 : (left.len_ > right.len_)) : cmp;
+}
+
+int ObTextDaaTIter::do_one_merge_round(int64_t &count)
+{
+  if (!small_posting_union_) {
+    return ObSRDaaTIterImpl::do_one_merge_round(count);
+  }
+
+  int ret = OB_SUCCESS;
+  for (int64_t i = 0; OB_SUCC(ret) && i < next_round_cnt_; ++i) {
+    const int64_t idx = next_round_iter_idxes_[i];
+    auto *dim = static_cast<ObTextRetrievalDaaTTokenIter *>(dim_iters_->at(idx));
+    if (OB_FAIL(dim->get_next_row())) {
+      if (ret == OB_ITER_END) {
+        iter_domain_ids_[idx] = nullptr;
+        ret = OB_SUCCESS;
+      }
+    } else if (OB_FAIL(dim->get_curr_id(iter_domain_ids_[idx]))) {
+    } else if (OB_ISNULL(iter_domain_ids_[idx]) || iter_domain_ids_[idx]->is_null()) {
+      ret = OB_ERR_UNEXPECTED;
+    }
+  }
+
+  const ObDatum *min_id = nullptr;
+  next_round_cnt_ = 0;
+  for (int64_t i = 0; OB_SUCC(ret) && i < dim_iters_->count(); ++i) {
+    const ObDatum *id = iter_domain_ids_[i];
+    if (id != nullptr) {
+      const int cmp = min_id == nullptr ? -1 : compare_posting_ids(*id, *min_id);
+      if (cmp < 0) {
+        min_id = id;
+        next_round_cnt_ = 0;
+      }
+      if (cmp <= 0) {
+        next_round_iter_idxes_[next_round_cnt_++] = i;
+      }
+    }
+  }
+
+  if (OB_FAIL(ret)) {
+  } else if (min_id == nullptr) {
+    ret = OB_ITER_END;
+  } else if (OB_FAIL(cache_result(count, *min_id, 0.0))) {
   }
   return ret;
 }

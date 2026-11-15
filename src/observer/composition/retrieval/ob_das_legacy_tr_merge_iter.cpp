@@ -473,6 +473,7 @@ int ObDASLegacyTRMergeIter::init_daat_iter_param(ObTextDaaTParam &iter_param)
   iter_param.allocator_ = &myself_allocator_;
   iter_param.mode_flag_ = ir_ctdef_->mode_flag_;
   iter_param.function_lookup_mode_ = function_lookup_mode_;
+  iter_param.minimum_should_match_ = ir_rtdef_->minimum_should_match_;
   if (OB_FAIL(init_bm25_param_est_ctx(iter_param.bm25_param_est_ctx_))) {
   }
   if (OB_SUCC(ret)) {

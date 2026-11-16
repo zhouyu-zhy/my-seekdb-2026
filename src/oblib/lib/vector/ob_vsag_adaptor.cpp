@@ -170,20 +170,27 @@ static void ob_cuvs_register(void *key, const float *vectors, const int64_t *ids
   delete slot;
   slot = ent;
 }
+// Call under g_ob_cuvs_mu before appending rows or using the CPU fallback.
+static bool ob_cuvs_materialize_vectors(ObCuvsEntry &entry);
+
 // Buffer vectors arriving via add_index. Plain HNSW builds BOTH its delta and its
 // snapshot incrementally via add_index (one row at a time), so this is where the
 // real data flows -- unlike build_index which is only used by the HNSW_SQ bulk path.
-static void ob_cuvs_add(void *key, const float *vectors, const int64_t *ids,
+static int ob_cuvs_add(void *key, const float *vectors, const int64_t *ids,
                         int dim, int size) {
-  if (vectors == nullptr || ids == nullptr || dim <= 0 || size <= 0) { return; }
+  if (vectors == nullptr || ids == nullptr || dim <= 0 || size <= 0) { return OB_INVALID_ARGUMENT; }
   std::lock_guard<std::mutex> guard(g_ob_cuvs_mu);
   ObCuvsEntry *&slot = g_ob_cuvs_reg[key];
   if (slot == nullptr) { slot = new ObCuvsEntry(); slot->dim_ = dim; }
   if (slot->dim_ == 0) { slot->dim_ = dim; }
-  if (slot->dim_ != dim) { return; }
+  if (slot->dim_ != dim) { return OB_INVALID_ARGUMENT; }
+  if (!ob_cuvs_materialize_vectors(*slot)) {
+    return OB_ERR_VSAG_RETURN_ERROR;
+  }
   slot->buf_vecs_.insert(slot->buf_vecs_.end(), vectors,
                          vectors + static_cast<size_t>(dim) * size);
   slot->buf_ids_.insert(slot->buf_ids_.end(), ids, ids + size);
+  return OB_SUCCESS;
 }
 static bool ob_cuvs_vsag_ready(void *key) {
   std::lock_guard<std::mutex> guard(g_ob_cuvs_mu);
@@ -289,6 +296,46 @@ private:
   void *argument_ = nullptr;
 };
 
+static CuvsQueryWorker &ob_cuvs_query_worker()
+{
+  static CuvsQueryWorker worker;
+  return worker;
+}
+
+struct CuvsDatasetCopyJob {
+  void *handle_;
+  float *output_;
+  int rc_ = -1;
+};
+
+static void *ob_cuvs_copy_dataset(void *arg)
+{
+  auto &job = *static_cast<CuvsDatasetCopyJob *>(arg);
+  job.rc_ = seekdb_cuvs_export_fp32(job.handle_, job.output_);
+  return nullptr;
+}
+
+static bool ob_cuvs_materialize_vectors(ObCuvsEntry &entry)
+{
+  const size_t n = entry.buf_ids_.size();
+  if (n == 0 || !entry.buf_vecs_.empty()) {
+    return true;
+  }
+  // A compact snapshot starts with only row IDs on the host. While the GPU
+  // dataset is the only copy, no rows may be appended to that snapshot.
+  if (!entry.bridge_ || entry.built_n_ != n || entry.dim_ <= 0 ||
+      n > entry.buf_vecs_.max_size() / static_cast<size_t>(entry.dim_)) {
+    return false;
+  }
+  std::vector<float> vectors(n * static_cast<size_t>(entry.dim_));
+  CuvsDatasetCopyJob job{entry.bridge_.get(), vectors.data()};
+  if (!ob_cuvs_query_worker().run(ob_cuvs_copy_dataset, &job) || job.rc_ != 0) {
+    return false;
+  }
+  entry.buf_vecs_.swap(vectors);
+  return true;
+}
+
 // Runs on a dedicated large-stack pthread: cuVS CAGRA build/search overflow the
 // small (~1.5MB) OB worker-thread stack.
 static void *ob_cuvs_job(void *arg) {
@@ -374,8 +421,7 @@ static bool ob_cuvs_try_search(void *key, vsag::Allocator *alloc,
   std::vector<unsigned> off(topk);
   std::vector<float> dst(topk);
   ObCuvsJob job{ent, query, topk, static_cast<int>(ent->dim_), n, need_build, &off, &dst, -1, false};
-  static CuvsQueryWorker query_worker;
-  if (!query_worker.run(ob_cuvs_job, &job)) { return false; }
+  if (!ob_cuvs_query_worker().run(ob_cuvs_job, &job)) { return false; }
   if (job.built_) { ob_vsag_trace("cuvs_build", key, static_cast<long>(ent->dim_), static_cast<long>(n)); }
   if (ent->bridge_ == nullptr || job.rc_ != 0) { return false; }
   // Post-filter: cuVS returned UNFILTERED top-k. Apply the query's row filter
@@ -426,14 +472,13 @@ struct ObCuvsSnapshotFile {
 struct ObCuvsSnapshotJob {
   const char *path_; void *handle_; long n_; long dim_; bool load_; int rc_;
   bool compact_ = false;
-  float *dataset_ = nullptr;
 };
 static void *ob_cuvs_snapshot_job(void *arg) {
   ObCuvsSnapshotJob *job = static_cast<ObCuvsSnapshotJob *>(arg);
   if (job->load_) {
     job->handle_ = seekdb_cuvs_deserialize(job->path_, job->n_, job->dim_);
     if (job->handle_ != nullptr && job->compact_ &&
-        seekdb_cuvs_export_fp32(job->handle_, job->dataset_) != 0) {
+        seekdb_cuvs_export_fp32(job->handle_, nullptr) != 0) {
       seekdb_cuvs_free(job->handle_);
       job->handle_ = nullptr;
     }
@@ -444,14 +489,9 @@ static void *ob_cuvs_snapshot_job(void *arg) {
   }
   return nullptr;
 }
-static bool ob_cuvs_snapshot_big_stack(ObCuvsSnapshotJob &job) {
-  pthread_t thread;
-  pthread_attr_t attr;
-  if (pthread_attr_init(&attr) != 0) { return false; }
-  int rc = pthread_attr_setstacksize(&attr, 32UL * 1024 * 1024);
-  if (rc == 0) { rc = pthread_create(&thread, &attr, ob_cuvs_snapshot_job, &job); }
-  pthread_attr_destroy(&attr);
-  return rc == 0 && pthread_join(thread, nullptr) == 0 && job.rc_ == 0;
+static bool ob_cuvs_snapshot_big_stack(ObCuvsSnapshotJob &job)
+{
+  return ob_cuvs_query_worker().run(ob_cuvs_snapshot_job, &job) && job.rc_ == 0;
 }
 
 static bool ob_cuvs_write(std::ostream &out, const void *data, size_t bytes) {
@@ -512,12 +552,16 @@ static bool ob_cuvs_serialize(void *key, std::ostream &out, int &ret) {
   ObCuvsEntry *ent = it->second;
   const size_t n = ent->buf_ids_.size();
   if (n < OB_CUVS_MIN_PTS || ent->dim_ <= 0 ||
-      ent->buf_vecs_.size() != n * static_cast<size_t>(ent->dim_)) {
+      (!ent->buf_vecs_.empty() && ent->buf_vecs_.size() != n * static_cast<size_t>(ent->dim_))) {
     return false;
   }
   const int64_t start_us = ObTimeUtility::current_time();
   bool built = false;
   if (ent->bridge_ == nullptr || ent->built_n_ != n) {
+    if (!ob_cuvs_materialize_vectors(*ent)) {
+      ret = OB_ERR_VSAG_RETURN_ERROR;
+      return true;
+    }
     std::shared_ptr<void> nb = ob_cuvs_build_big_stack(ent->buf_vecs_.data(),
                                                        static_cast<long>(n), ent->dim_);
     if (nb == nullptr) {
@@ -533,6 +577,10 @@ static bool ob_cuvs_serialize(void *key, std::ostream &out, int &ret) {
   ObCuvsSnapshotJob job{graph.path_, ent->bridge_.get(), static_cast<long>(n), ent->dim_, false, -1};
   if (graph.file_ == nullptr || !ob_cuvs_snapshot_big_stack(job) ||
       ::fseeko(graph.file_, 0, SEEK_END) != 0 || ::ftello(graph.file_) <= 0) {
+    ret = OB_ERR_VSAG_RETURN_ERROR;
+    return true;
+  }
+  if (!job.compact_ && !ob_cuvs_materialize_vectors(*ent)) {
     ret = OB_ERR_VSAG_RETURN_ERROR;
     return true;
   }
@@ -586,7 +634,7 @@ static int ob_cuvs_deserialize(void *key, int expected_dim, std::istream &in, bo
     ObCuvsEntry *ent = new ObCuvsEntry();
     ent->dim_ = dim32;
     ent->buf_ids_.resize(n);
-    ent->buf_vecs_.resize(n * static_cast<size_t>(dim32));
+    if (!compact) ent->buf_vecs_.resize(n * static_cast<size_t>(dim32));
     if (!ob_cuvs_read(in, ent->buf_ids_.data(), n * sizeof(int64_t)) ||
         (!compact && !ob_cuvs_read(in, ent->buf_vecs_.data(), ent->buf_vecs_.size() * sizeof(float)))) {
       delete ent;
@@ -605,7 +653,6 @@ static int ob_cuvs_deserialize(void *key, int expected_dim, std::istream &in, bo
       }
       ObCuvsSnapshotJob job{graph.path_, nullptr, static_cast<long>(n), dim32, true, -1};
       job.compact_ = compact;
-      job.dataset_ = ent->buf_vecs_.data();
       if (graph.file_ == nullptr || remaining != 0 || ::fflush(graph.file_) != 0 ||
           !ob_cuvs_snapshot_big_stack(job)) {
         delete ent;
@@ -879,6 +926,8 @@ int HnswIndexHandler::ensure_vsag_fallback()
       auto it = g_ob_cuvs_reg.find(this);
       if (it == g_ob_cuvs_reg.end()) {
         ret = OB_ERR_UNEXPECTED;
+      } else if (!ob_cuvs_materialize_vectors(*it->second)) {
+        ret = OB_ERR_VSAG_RETURN_ERROR;
       } else {
         dim = it->second->dim_;
         vectors = it->second->buf_vecs_;
@@ -1713,8 +1762,9 @@ int add_index(VectorIndexPtr &index_handler, float *vector,
   ob_vsag_trace("add_dense", (const void*)index_handler, (long)(dim), (long)(size));
   if (ob_cuvs_marked(index_handler) && index_handler != nullptr &&
       strcmp(static_cast<HnswIndexHandler *>(index_handler)->get_metric(), "l2") == 0) {
-    ob_cuvs_add(index_handler, vector, ids, dim, size);
-    if (!ob_cuvs_vsag_ready(index_handler)) {
+    if (OB_FAIL(ob_cuvs_add(index_handler, vector, ids, dim, size))) {
+      return ret;
+    } else if (!ob_cuvs_vsag_ready(index_handler)) {
       return OB_SUCCESS;
     }
   }

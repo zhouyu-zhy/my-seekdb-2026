@@ -713,7 +713,8 @@ void Engine::applyUpsertRow(uint32_t tableId, Row& row, uint64_t off, uint32_t b
     auto it = tables_.find(tableId);
     if (it == tables_.end()) fail("internal_error", "row for unknown table");
     TableData& t = *it->second;
-    t.vecCacheValid = false;
+    t.filterCol = -1;
+    t.sketchValid = false;
     int64_t pk = row[static_cast<size_t>(t.schema.pk)].i;
     auto r = t.refs.find(pk);
     uint32_t oldSize = r == t.refs.end() ? 0 : r->second.size;
@@ -759,7 +760,8 @@ void Engine::applyDelete(uint32_t tableId, int64_t pk) {
     auto it = tables_.find(tableId);
     if (it == tables_.end()) return;
     TableData& t = *it->second;
-    t.vecCacheValid = false;
+    t.filterCol = -1;
+    t.sketchValid = false;
     auto r = t.refs.find(pk);
     if (r == t.refs.end()) return;
     uint32_t oldSize = r->second.size;
@@ -791,11 +793,12 @@ void Engine::dropCache(TableData& t) {
     t.rows.clear();
     t.rows.shrink_to_fit();
     t.slotOf.clear();
-    t.vecCache.clear();
-    t.vecCache.shrink_to_fit();
-    t.vecRows.clear();
-    t.vecRows.shrink_to_fit();
-    t.vecCacheValid = false;
+    t.filterOrder.clear();
+    t.filterOrder.shrink_to_fit();
+    t.vectorSketch.clear();
+    t.vectorSketch.shrink_to_fit();
+    t.sketchValid = false;
+    t.filterCol = -1;
     t.cached = false;
 }
 

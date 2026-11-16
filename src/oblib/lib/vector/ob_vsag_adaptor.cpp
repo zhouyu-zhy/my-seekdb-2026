@@ -24,6 +24,9 @@
 #include <memory>
 #include <limits>
 #include <unistd.h>
+#ifdef __linux__
+#include <sys/mman.h>
+#endif
 #include <istream>
 #include <ostream>
 #include <algorithm>
@@ -463,6 +466,32 @@ static bool ob_cuvs_read(std::istream &in, void *data, size_t bytes) {
   return true;
 }
 
+// hipVS already wrote this private temporary file. On Linux, let the
+// serializer consume its pages directly instead of copying through fread.
+static bool ob_cuvs_write_snapshot_file(std::ostream &out, FILE *file, uint64_t bytes)
+{
+#ifdef __linux__
+  if (bytes <= std::numeric_limits<size_t>::max()) {
+    const size_t length = static_cast<size_t>(bytes);
+    void *data = ::mmap(nullptr, length, PROT_READ, MAP_PRIVATE, ::fileno(file), 0);
+    if (data != MAP_FAILED) {
+      const bool written = ob_cuvs_write(out, data, length);
+      ::munmap(data, length);
+      return written;
+    }
+  }
+#endif
+  std::vector<char> chunk(1024 * 1024);
+  while (bytes > 0) {
+    const size_t count = std::min<uint64_t>(bytes, chunk.size());
+    if (::fread(chunk.data(), 1, count, file) != count || !ob_cuvs_write(out, chunk.data(), count)) {
+      return false;
+    }
+    bytes -= count;
+  }
+  return true;
+}
+
 // Returns false when the index is not a GPU candidate and must use the VSAG format.
 static bool ob_cuvs_serialize(void *key, std::ostream &out, int &ret) {
   ret = OB_SUCCESS;
@@ -513,15 +542,9 @@ static bool ob_cuvs_serialize(void *key, std::ostream &out, int &ret) {
     LOG_WARN("[OBVSAG][cuVS] failed to write snapshot stream", K(ret), KP(key), K(n));
     return true;
   }
-  std::vector<char> chunk(65536);
-  uint64_t remaining = graph_bytes;
-  while (remaining > 0) {
-    const size_t bytes = std::min<uint64_t>(remaining, chunk.size());
-    if (::fread(chunk.data(), 1, bytes, graph.file_) != bytes || !ob_cuvs_write(out, chunk.data(), bytes)) {
-      ret = OB_ERR_UNEXPECTED;
-      return true;
-    }
-    remaining -= bytes;
+  if (!ob_cuvs_write_snapshot_file(out, graph.file_, graph_bytes)) {
+    ret = OB_ERR_UNEXPECTED;
+    return true;
   }
   LOG_INFO("[OBVSAG][cuVS] serialized GPU CAGRA snapshot", KP(key), K(n), K(dim32),
            K(built), K(build_us), K(graph_bytes));
@@ -559,7 +582,7 @@ static int ob_cuvs_deserialize(void *key, int expected_dim, std::istream &in) {
       LOG_WARN("[OBVSAG][cuVS] truncated snapshot payload", K(ret), KP(key), K(n64));
     } else {
       ObCuvsSnapshotFile graph;
-      std::vector<char> chunk(65536);
+      std::vector<char> chunk(1024 * 1024);
       uint64_t remaining = graph_bytes;
       while (graph.file_ != nullptr && remaining > 0) {
         const size_t bytes = std::min<uint64_t>(remaining, chunk.size());

@@ -25,6 +25,7 @@
 #include <limits>
 #include <unistd.h>
 #ifdef __linux__
+#include <fcntl.h>
 #include <sys/mman.h>
 #endif
 #include <istream>
@@ -457,10 +458,30 @@ static bool ob_cuvs_try_search(void *key, vsag::Allocator *alloc,
 
 static const char OB_CUVS_SNAPSHOT_MAGIC[8] = {'O', 'B', 'C', 'U', 'V', 'S', '0', '2'};
 static const char OB_CUVS_COMPACT_MAGIC[8] = {'O', 'B', 'C', 'U', 'V', 'S', '0', '4'};
+static constexpr uint64_t CUVS_MEMORY_SNAPSHOT_LIMIT = 512ULL * 1024 * 1024;
 struct ObCuvsSnapshotFile {
-  FILE *file_ = ::tmpfile();
+  FILE *file_ = nullptr;
+  bool memory_backed_ = false;
   char path_[64] = {};
-  ObCuvsSnapshotFile() {
+  explicit ObCuvsSnapshotFile(uint64_t expected_bytes) {
+#if defined(__linux__) && defined(MFD_CLOEXEC)
+    if (expected_bytes <= CUVS_MEMORY_SNAPSHOT_LIMIT) {
+      const int fd = ::memfd_create("seekdb-cuvs-snapshot", MFD_CLOEXEC);
+      if (fd >= 0) {
+        file_ = ::fdopen(fd, "w+b");
+        if (file_ == nullptr) {
+          ::close(fd);
+        } else {
+          memory_backed_ = true;
+        }
+      }
+    }
+#else
+    (void)expected_bytes;
+#endif
+    if (file_ == nullptr) {
+      file_ = ::tmpfile();
+    }
     if (file_ != nullptr) {
       ::snprintf(path_, sizeof(path_), "/proc/self/fd/%d", ::fileno(file_));
     }
@@ -543,6 +564,39 @@ static bool ob_cuvs_write_snapshot_file(std::ostream &out, FILE *file, uint64_t 
   return true;
 }
 
+static bool ob_cuvs_read_snapshot_file(std::istream &in, ObCuvsSnapshotFile &snapshot, uint64_t bytes)
+{
+  FILE *file = snapshot.file_;
+  if (file == nullptr) {
+    return false;
+  }
+#ifdef __linux__
+  if (snapshot.memory_backed_ && bytes <= CUVS_MEMORY_SNAPSHOT_LIMIT) {
+    const int fd = ::fileno(file);
+    const size_t length = static_cast<size_t>(bytes);
+    // Reserve backing pages before accessing the mapping. An allocation
+    // failure can fall back to checked writes without consuming input.
+    if (::posix_fallocate(fd, 0, static_cast<off_t>(length)) == 0) {
+      void *data = ::mmap(nullptr, length, PROT_WRITE, MAP_SHARED, fd, 0);
+      if (data != MAP_FAILED) {
+        const bool read = ob_cuvs_read(in, data, length);
+        ::munmap(data, length);
+        return read;
+      }
+    }
+  }
+#endif
+  std::vector<char> chunk(1024 * 1024);
+  while (bytes > 0) {
+    const size_t count = std::min<uint64_t>(bytes, chunk.size());
+    if (!ob_cuvs_read(in, chunk.data(), count) || ::fwrite(chunk.data(), 1, count, file) != count) {
+      return false;
+    }
+    bytes -= count;
+  }
+  return ::fflush(file) == 0;
+}
+
 // Returns false when the index is not a GPU candidate and must use the VSAG format.
 static bool ob_cuvs_serialize(void *key, std::ostream &out, int &ret) {
   ret = OB_SUCCESS;
@@ -573,7 +627,11 @@ static bool ob_cuvs_serialize(void *key, std::ostream &out, int &ret) {
     ent->bridge_ = nb; ent->built_n_ = n; ent->ids_ = ent->buf_ids_;
     built = true;
   }
-  ObCuvsSnapshotFile graph;
+  // Estimate the temporary size from the FP32 rows and 128 uint32 edges.
+  const uint64_t row_bytes = sizeof(float) * (static_cast<uint64_t>(ent->dim_) + 128);
+  const uint64_t expected_bytes = n <= CUVS_MEMORY_SNAPSHOT_LIMIT / row_bytes
+      ? n * row_bytes : CUVS_MEMORY_SNAPSHOT_LIMIT + 1;
+  ObCuvsSnapshotFile graph(expected_bytes);
   ObCuvsSnapshotJob job{graph.path_, ent->bridge_.get(), static_cast<long>(n), ent->dim_, false, -1};
   if (graph.file_ == nullptr || !ob_cuvs_snapshot_big_stack(job) ||
       ::fseeko(graph.file_, 0, SEEK_END) != 0 || ::ftello(graph.file_) <= 0) {
@@ -641,19 +699,10 @@ static int ob_cuvs_deserialize(void *key, int expected_dim, std::istream &in, bo
       ret = OB_ERR_UNEXPECTED;
       LOG_WARN("[OBVSAG][cuVS] truncated snapshot payload", K(ret), KP(key), K(n64));
     } else {
-      ObCuvsSnapshotFile graph;
-      std::vector<char> chunk(1024 * 1024);
-      uint64_t remaining = graph_bytes;
-      while (graph.file_ != nullptr && remaining > 0) {
-        const size_t bytes = std::min<uint64_t>(remaining, chunk.size());
-        if (!ob_cuvs_read(in, chunk.data(), bytes) || ::fwrite(chunk.data(), 1, bytes, graph.file_) != bytes) {
-          break;
-        }
-        remaining -= bytes;
-      }
+      ObCuvsSnapshotFile graph(graph_bytes);
       ObCuvsSnapshotJob job{graph.path_, nullptr, static_cast<long>(n), dim32, true, -1};
       job.compact_ = compact;
-      if (graph.file_ == nullptr || remaining != 0 || ::fflush(graph.file_) != 0 ||
+      if (!ob_cuvs_read_snapshot_file(in, graph, graph_bytes) ||
           !ob_cuvs_snapshot_big_stack(job)) {
         delete ent;
         ret = OB_ERR_VSAG_RETURN_ERROR;

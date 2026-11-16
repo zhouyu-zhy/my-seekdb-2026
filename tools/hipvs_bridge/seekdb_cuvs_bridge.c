@@ -8,6 +8,7 @@
 #else
 #include <cuda_runtime.h>
 #endif
+#include <pthread.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -17,13 +18,23 @@ typedef struct {
   cuvsCagraIndexParams_t ip;
   cuvsCagraIndex_t       idx;
   long n, dim;
+  pthread_mutex_t search_mutex;
+  unsigned char* scratch;
+  size_t scratch_capacity;
+  cuvsCagraSearchParams_t search_params;
+  size_t default_itopk;
 } sk_cuvs_index;
 
 void* seekdb_cuvs_build(const float* base, long n, long dim)
 {
   sk_cuvs_index* h = (sk_cuvs_index*)calloc(1, sizeof(*h));
   if (!h) return NULL;
-  if (cuvsResourcesCreate(&h->res) != CUVS_SUCCESS) { free(h); return NULL; }
+  if (pthread_mutex_init(&h->search_mutex, NULL) != 0) { free(h); return NULL; }
+  if (cuvsResourcesCreate(&h->res) != CUVS_SUCCESS) {
+    pthread_mutex_destroy(&h->search_mutex);
+    free(h);
+    return NULL;
+  }
 
   DLManagedTensor dset; long ds[2] = {n, dim};
   dset.dl_tensor.data = (void*)base;
@@ -36,7 +47,9 @@ void* seekdb_cuvs_build(const float* base, long n, long dim)
   h->ip->build_algo = NN_DESCENT;
   h->ip->graph_degree = 128;
   h->ip->intermediate_graph_degree = 256;
-  h->ip->nn_descent_niter = 100;
+  // Keep both graph degrees and reduce refinement passes. Search below uses
+  // more candidates for larger Top-K requests to preserve retrieval quality.
+  h->ip->nn_descent_niter = 32;
   if (cuvsCagraIndexCreate(&h->idx)      != CUVS_SUCCESS) goto fail_ip;
   if (cuvsCagraBuild(h->res, h->ip, &dset, h->idx) != CUVS_SUCCESS) goto fail_idx;
   h->n = n; h->dim = dim;
@@ -44,7 +57,7 @@ void* seekdb_cuvs_build(const float* base, long n, long dim)
 
 fail_idx: cuvsCagraIndexDestroy(h->idx);
 fail_ip:  cuvsCagraIndexParamsDestroy(h->ip);
-fail_res: cuvsResourcesDestroy(h->res); free(h);
+fail_res: cuvsResourcesDestroy(h->res); pthread_mutex_destroy(&h->search_mutex); free(h);
   fprintf(stderr, "[seekdb_cuvs] build failed: %s\n", cuvsGetLastErrorText());
   return NULL;
 }
@@ -72,14 +85,42 @@ int seekdb_cuvs_search(void* handle, const float* query, long nq, long topk,
 
   int rc = 0;
   unsigned char* scratch = NULL;
-  if (cuvsRMMAlloc(h->res, (void**)&scratch, scratch_bytes) != CUVS_SUCCESS) {
-    fprintf(stderr, "[seekdb_cuvs] search scratch allocation failed: %s\n", cuvsGetLastErrorText());
-    return 10;
+  float* qd = NULL;
+  unsigned* nd = NULL;
+  float* dd = NULL;
+  cuvsCagraSearchParams_t sp = NULL;
+  // Retain at most 1 MiB per live index. Large batch buffers are temporary.
+  const size_t retain_limit = 1024 * 1024;
+  pthread_mutex_lock(&h->search_mutex);
+  if (scratch_bytes <= h->scratch_capacity) {
+    scratch = h->scratch;
+  } else {
+    size_t capacity = scratch_bytes;
+    if (scratch_bytes <= retain_limit) {
+      capacity = 4096;
+      while (capacity < scratch_bytes) capacity *= 2;
+    }
+    if (cuvsRMMAlloc(h->res, (void**)&scratch, capacity) != CUVS_SUCCESS) {
+      rc = 10;
+      goto done;
+    }
+    if (capacity <= retain_limit) {
+      if (h->scratch) cuvsRMMFree(h->res, h->scratch, h->scratch_capacity);
+      h->scratch = scratch;
+      h->scratch_capacity = capacity;
+    }
   }
-  float* qd = (float*)scratch;
-  unsigned* nd = (unsigned*)(scratch + ids_offset);
-  float* dd = (float*)(scratch + distances_offset);
-  cuvsCagraSearchParams_t sp = 0;
+  if (!h->search_params) {
+    if (cuvsCagraSearchParamsCreate(&h->search_params) != CUVS_SUCCESS) {
+      rc = 14;
+      goto done;
+    }
+    h->default_itopk = h->search_params->itopk_size;
+  }
+  sp = h->search_params;
+  qd = (float*)scratch;
+  nd = (unsigned*)(scratch + ids_offset);
+  dd = (float*)(scratch + distances_offset);
   if (cudaMemcpy(qd, query, query_bytes, cudaMemcpyDefault) != cudaSuccess) { rc=13; goto done; }
   {
     DLManagedTensor qt = {0}, nt, dt; long qs[2]={nq,h->dim}, nsh[2]={nq,topk}, dsh[2]={nq,topk};
@@ -88,11 +129,11 @@ int seekdb_cuvs_search(void* handle, const float* query, long nq, long topk,
     qt.dl_tensor.shape=qs; qt.dl_tensor.strides=0; qt.dl_tensor.byte_offset=0;
     nt=qt; nt.dl_tensor.data=nd; nt.dl_tensor.dtype.code=kDLUInt; nt.dl_tensor.shape=nsh;
     dt=qt; dt.dl_tensor.data=dd; dt.dl_tensor.dtype.code=kDLFloat; dt.dl_tensor.shape=dsh;
-    if (cuvsCagraSearchParamsCreate(&sp) != CUVS_SUCCESS) { rc=14; goto done; }
     {
       size_t required_itopk = (size_t)topk * 4;
-      if (required_itopk < 512) required_itopk = 512;
-      if (sp->itopk_size < required_itopk) sp->itopk_size = required_itopk;
+      const size_t minimum_itopk = topk > 64 ? 768 : 512;
+      if (required_itopk < minimum_itopk) required_itopk = minimum_itopk;
+      sp->itopk_size = h->default_itopk > required_itopk ? h->default_itopk : required_itopk;
       sp->search_width = 4;
     }
     cuvsFilter f; f.type=NO_FILTER; f.addr=(uintptr_t)0;
@@ -104,8 +145,11 @@ int seekdb_cuvs_search(void* handle, const float* query, long nq, long topk,
     }
   }
 done:
-  if (sp) cuvsCagraSearchParamsDestroy(sp);
-  cuvsRMMFree(h->res, scratch, scratch_bytes);
+  // Drain a possibly partially submitted search before reusing or releasing
+  // its memory after an error.
+  if (rc != 0) cuvsStreamSync(h->res);
+  if (scratch && scratch != h->scratch) cuvsRMMFree(h->res, scratch, scratch_bytes);
+  pthread_mutex_unlock(&h->search_mutex);
   if (rc) fprintf(stderr, "[seekdb_cuvs] search rc=%d: %s\n", rc, cuvsGetLastErrorText());
   return rc;
 }
@@ -114,6 +158,9 @@ void seekdb_cuvs_free(void* handle)
 {
   sk_cuvs_index* h = (sk_cuvs_index*)handle;
   if (!h) return;
+  if (h->search_params) cuvsCagraSearchParamsDestroy(h->search_params);
+  if (h->scratch) cuvsRMMFree(h->res, h->scratch, h->scratch_capacity);
+  pthread_mutex_destroy(&h->search_mutex);
   cuvsCagraIndexDestroy(h->idx);
   cuvsCagraIndexParamsDestroy(h->ip);
   cuvsResourcesDestroy(h->res);
@@ -136,6 +183,7 @@ void* seekdb_cuvs_deserialize(const char* filename, long n, long dim)
   if (!filename || n <= 0 || dim <= 0) return NULL;
   sk_cuvs_index* index = (sk_cuvs_index*)calloc(1, sizeof(*index));
   if (!index) return NULL;
+  if (pthread_mutex_init(&index->search_mutex, NULL) != 0) { free(index); return NULL; }
   if (cuvsResourcesCreate(&index->res) != CUVS_SUCCESS) goto fail;
   if (cuvsCagraIndexParamsCreate(&index->ip) != CUVS_SUCCESS) goto fail_res;
   if (cuvsCagraIndexCreate(&index->idx) != CUVS_SUCCESS) goto fail_ip;
@@ -162,6 +210,7 @@ fail_res:
   cuvsResourcesDestroy(index->res);
 fail:
   fprintf(stderr, "[seekdb_cuvs] deserialize failed: %s\n", cuvsGetLastErrorText());
+  pthread_mutex_destroy(&index->search_mutex);
   free(index);
   return NULL;
 }

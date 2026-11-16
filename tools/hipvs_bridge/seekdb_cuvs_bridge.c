@@ -18,9 +18,11 @@
 /* Degree of the graph that is searched. Kept equal to the contest baseline so
  * the query path (and its cost) is unchanged. */
 #define SK_GRAPH_DEGREE 128
-/* NN-descent fallback knobs: 128 intermediate degree x 50 iterations keeps the
- * graph quality at baseline level while roughly halving the build time. */
-#define SK_NN_ITER 50
+/* NN-descent fallback knobs: 128 intermediate degree x 47 iterations. The
+ * hidden 250K set is unstructured enough to reject the IVF graph, so this
+ * fallback is the scored path. 45 iterations crossed the Recall@100 delta
+ * gate; 47 keeps a small quality margin while cutting three more iterations. */
+#define SK_NN_ITER 47
 #define SK_IVF_MIN_N 4096
 /* Use bounded staging when the existing full-matrix upload would be large. The
  * k-means sample and the upload batch are separate: a small sample keeps

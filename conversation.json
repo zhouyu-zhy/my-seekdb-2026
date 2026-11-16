@@ -65,6 +65,12 @@
       "role": "student",
       "verbatim": true,
       "content": "Agent Prompt 按规则只给选手本人可核验的学习贡献计分。这个规则已经放宽，你可以进行实验优化"
+    },
+    {
+      "id": "r2-next-u1",
+      "role": "student",
+      "verbatim": true,
+      "content": "满分80，仍然需要继续优化"
     }
   ],
   "conversations": [
@@ -290,6 +296,30 @@
       "command": "taskset -c 0,1 python3 minivectordb/tests/check_engine.py --baseline /var/tmp/mvdb-round2-before --candidate /var/tmp/mvdb-round2-candidate",
       "output": "mvdb-round2-before 1 write=1.1222 query=0.4598 rss_kib=18252\nmvdb-round2-candidate 1 write=0.6310 query=0.2000 rss_kib=14648\nmvdb-round2-candidate 2 write=0.6431 query=0.2034 rss_kib=14584\nmvdb-round2-before 2 write=1.1432 query=0.4465 rss_kib=18260\nmvdb-round2-before 3 write=1.1571 query=0.5051 rss_kib=18172\nmvdb-round2-candidate 3 write=0.6871 query=0.2054 rss_kib=14580\nPASS 3000 exact response comparisons across 3 paired runs and 20 independent brute-force queries\nPASS exact/ANN ties, ±1e38/denormals, illegal vectors, failed transaction statement, SIGKILL and torn tail\nPASS 608-row sketch ties, out-of-range query fallback, rollback, and committed index invalidation\nPASS interrupted recovery, WAL=76207853 bytes under a 64 MiB address-space cap; peak RSS=5948 KiB\n",
       "interpretation": "同机三轮中位：写入 1.1432 s → 0.6431 s，查询 0.4598 s → 0.2034 s，峰值 RSS 18252 → 14584 KiB。逐条结果和独立真值兼顾性能与正确性。强杀恢复、撕裂尾块注入与内存上限补足公开样例没有覆盖的故障。"
+    },
+    {
+      "id": "r2-next-e1",
+      "title": "正式评测反馈",
+      "executed_by": "competition platform; screenshot supplied by the user",
+      "command": "平台对前一次加赛提交的评测结果页",
+      "output": "MySQL 正式用例 通过；性能原始指标 E = 2853.203279；Agent Prompt 原始分 = 6.000000",
+      "interpretation": "原始指标用于分榜排名，不能把它们直接相加为满分 80 的排名分。"
+    },
+    {
+      "id": "r2-next-e2",
+      "title": "双线程扫描的负面结果",
+      "executed_by": "agent",
+      "command": "taskset -c 0,1 python3 minivectordb/tests/check_engine.py --baseline /var/tmp/mvdb-storage-next --candidate minivectordb/minivectordb-avx2",
+      "output": "mvdb-storage-next 1 write=0.7121 query=0.3760 rss_kib=14524\nminivectordb-avx2 1 write=0.6621 query=0.3800 rss_kib=14556\nminivectordb-avx2 2 write=0.7372 query=0.3893 rss_kib=14516\nmvdb-storage-next 2 write=0.7441 query=0.3351 rss_kib=14628\nmvdb-storage-next 3 write=0.6824 query=0.3186 rss_kib=14684\nminivectordb-avx2 3 write=0.7020 query=0.3069 rss_kib=14576\nPASS 3000 exact response comparisons across 3 paired runs and 20 independent brute-force queries\nPASS exact/ANN ties, ±1e38/denormals, illegal vectors, failed transaction statement, SIGKILL and torn tail\nPASS 608-row sketch ties, out-of-range query fallback, rollback, and committed index invalidation\nPASS interrupted recovery, WAL=76207853 bytes under a 64 MiB address-space cap; peak RSS=5920 KiB\n",
+      "interpretation": "两路查询能合并成原来的精确结果，但本地三轮中位查询耗时为 0.3800 s，串行对照为 0.3351 s。线程同步与独立候选堆的开销抵消收益，最终撤销并行方案。"
+    },
+    {
+      "id": "r2-next-e3",
+      "title": "保留优化的五轮对照与日志兼容验证",
+      "executed_by": "agent",
+      "command": "taskset -c 0,1 python3 /var/tmp/mvdb-next-five.py --baseline /var/tmp/mvdb-861-before --candidate minivectordb/minivectordb-avx2",
+      "output": "mvdb-861-before 1 write=0.6882 query=0.2815 rss_kib=14656\nminivectordb-avx2 1 write=0.6760 query=0.2445 rss_kib=14488\nminivectordb-avx2 2 write=0.6360 query=0.1970 rss_kib=14560\nmvdb-861-before 2 write=0.6731 query=0.2654 rss_kib=14788\nmvdb-861-before 3 write=0.6702 query=0.2996 rss_kib=14672\nminivectordb-avx2 3 write=0.7151 query=0.2353 rss_kib=14500\nminivectordb-avx2 4 write=0.6882 query=0.2806 rss_kib=14508\nmvdb-861-before 4 write=0.6799 query=0.3046 rss_kib=14564\nmvdb-861-before 5 write=0.7093 query=0.2715 rss_kib=14528\nminivectordb-avx2 5 write=0.6430 query=0.2456 rss_kib=14628\nPASS 5000 exact response comparisons across 5 paired runs and 20 independent brute-force queries\nPASS exact/ANN ties, ±1e38/denormals, illegal vectors, failed transaction statement, SIGKILL and torn tail\nPASS 608-row sketch ties, out-of-range query fallback, rollback, and committed index invalidation\nPASS interrupted recovery, WAL=76207853 bytes under a 64 MiB address-space cap; peak RSS=6096 KiB\nPASS identical WAL bytes and bidirectional old/new recovery after SIGKILL\n",
+      "interpretation": "延后 TopK 投影，并用 to_chars 直接输出 JSON 数值。写入侧在落盘后复用事务行，同时减少日志校验和编解码开销。五轮中位查询 0.2815 s 至 0.2445 s，写入 0.6799 s 至 0.6760 s。对照同时确认日志字节不变，新旧实现能交叉恢复。"
     }
   ],
   "student_evidence_units": [
@@ -428,7 +458,8 @@
     "实现限制：不支持 NULL、JOIN、聚合、子查询、OR、ALTER、DROP、外键、主键更新和嵌套事务；大事务的 overlay 仍在内存中构建。",
     "验证限制：性能数字来自开发机 WSL2，不是评测机；没有实现真正的 IVF/HNSW，ann 模式返回精确结果。",
     "第一批 Q01 到 Q05 的学生预测来自 A.md，实际输出由 Agent 运行；结果后解释仍在等待学生补充，因此这五个实例目前按 1 分档记录，尚未升级到 1.5 分档。",
-    "新增记录中的实验由 Agent 执行，用户没有在本轮提供额外个人复盘。正式隐藏用例、平台性能排名与 Prompt 排名均未运行。"
+    "新增记录中的实验由 Agent 执行，用户没有在本轮提供额外个人复盘。正式隐藏用例、平台性能排名与 Prompt 排名均未运行。",
+    "本次新增分析与验证为 Agent 实测，未记录新的学生本人复盘。提交在独立开发分支，尚未提交正式评测。"
   ],
   "lab_protocol": {
     "questions_file": "Q.md",

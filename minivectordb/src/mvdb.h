@@ -195,7 +195,7 @@ struct Statement {
 };
 
 Statement parseStatement(const std::string& sql);
-std::vector<double> parseVectorText(const std::string& text);
+std::vector<double> parseVectorText(const std::string& text, size_t expectedSize = 0);
 
 // ---------------------------------------------------------------------------
 // Storage / execution engine
@@ -278,8 +278,9 @@ private:
     uint64_t liveBytesTotal() const;
 
     // payload encoding / replay
-    void buildPayload(std::vector<uint8_t>& payload);
-    void applyPayload(const std::vector<uint8_t>& payload, uint64_t payloadOffset);
+    void buildPayload(std::vector<uint8_t>& payload, std::vector<Row*>& upserts);
+    void applyPayload(const std::vector<uint8_t>& payload, uint64_t payloadOffset,
+                      const std::vector<Row*>* committedRows = nullptr);
     void applyUpsertRow(uint32_t tableId, Row& row, uint64_t off, uint32_t bodySize);
     void applyUpsertRef(uint32_t tableId, int64_t pk, uint64_t off, uint32_t bodySize);
     void applyDelete(uint32_t tableId, int64_t pk);

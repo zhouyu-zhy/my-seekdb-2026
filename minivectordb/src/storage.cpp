@@ -24,7 +24,7 @@ namespace fs = std::filesystem;
 
 namespace {
 
-uint32_t crcTable[256];
+uint32_t crcTable[8][256];
 bool crcReady = false;
 
 void initCrc() {
@@ -32,7 +32,13 @@ void initCrc() {
     for (uint32_t i = 0; i < 256; ++i) {
         uint32_t c = i;
         for (int k = 0; k < 8; ++k) c = (c & 1) ? (0xEDB88320u ^ (c >> 1)) : (c >> 1);
-        crcTable[i] = c;
+        crcTable[0][i] = c;
+    }
+    for (size_t lane = 1; lane < 8; ++lane) {
+        for (size_t byte = 0; byte < 256; ++byte) {
+            const uint32_t previous = crcTable[lane - 1][byte];
+            crcTable[lane][byte] = crcTable[0][previous & 255] ^ (previous >> 8);
+        }
     }
     crcReady = true;
 }
@@ -80,13 +86,13 @@ std::string getStr(const uint8_t*& p, const uint8_t* end) {
     return s;
 }
 
-void putFloat(std::vector<uint8_t>& out, float f) {
+[[maybe_unused]] void putFloat(std::vector<uint8_t>& out, float f) {
     uint32_t bits;
     std::memcpy(&bits, &f, sizeof(bits));
     putU32(out, bits);
 }
 
-float getFloat(const uint8_t*& p) {
+[[maybe_unused]] float getFloat(const uint8_t*& p) {
     uint32_t bits = getU32(p);
     float f;
     std::memcpy(&f, &bits, sizeof(f));
@@ -222,7 +228,17 @@ int TableSchema::vectorColumnCount() const {
 uint32_t crc32(const uint8_t* data, size_t len) {
     initCrc();
     uint32_t c = 0xFFFFFFFFu;
-    for (size_t i = 0; i < len; ++i) c = crcTable[(c ^ data[i]) & 0xFFu] ^ (c >> 8);
+    while (len >= 8) {
+        c ^= static_cast<uint32_t>(data[0]) | (static_cast<uint32_t>(data[1]) << 8) |
+             (static_cast<uint32_t>(data[2]) << 16) | (static_cast<uint32_t>(data[3]) << 24);
+        c = crcTable[7][c & 255] ^ crcTable[6][(c >> 8) & 255] ^
+            crcTable[5][(c >> 16) & 255] ^ crcTable[4][c >> 24] ^
+            crcTable[3][data[4]] ^ crcTable[2][data[5]] ^
+            crcTable[1][data[6]] ^ crcTable[0][data[7]];
+        data += 8;
+        len -= 8;
+    }
+    for (size_t i = 0; i < len; ++i) c = crcTable[0][(c ^ data[i]) & 255] ^ (c >> 8);
     return c ^ 0xFFFFFFFFu;
 }
 
@@ -249,7 +265,12 @@ void encodeRowBody(const TableSchema& schema, const Row& row, std::vector<uint8_
             putStr(out, v.s);
         } else {
             putU32(out, static_cast<uint32_t>(v.v.size()));
+#if defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
+            const auto* begin = reinterpret_cast<const uint8_t*>(v.v.data());
+            if (!v.v.empty()) out.insert(out.end(), begin, begin + v.v.size() * sizeof(float));
+#else
             for (float f : v.v) putFloat(out, f);
+#endif
         }
     }
 }
@@ -273,7 +294,13 @@ Row decodeRowBody(const TableSchema& schema, const uint8_t*& p, const uint8_t* e
                 fail("internal_error", "corrupt vector data");
             }
             row[i].v.resize(dim);
+#if defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
+            const size_t bytes = static_cast<size_t>(dim) * sizeof(float);
+            if (bytes > 0) std::memcpy(row[i].v.data(), p, bytes);
+            p += bytes;
+#else
             for (uint32_t k = 0; k < dim; ++k) row[i].v[k] = getFloat(p);
+#endif
         }
     }
     return row;
@@ -577,8 +604,9 @@ void Engine::addSchema(const TableSchema& schema) {
     tables_[schema.id] = std::move(td);
 }
 
-void Engine::buildPayload(std::vector<uint8_t>& payload) {
+void Engine::buildPayload(std::vector<uint8_t>& payload, std::vector<Row*>& upserts) {
     payload.clear();
+    upserts.clear();
     auto appendFrame = [&](uint8_t type, const std::function<void()>& body) {
         size_t start = payload.size();
         payload.push_back(type);
@@ -599,7 +627,7 @@ void Engine::buildPayload(std::vector<uint8_t>& payload) {
         for (const auto& kv : ot->second.entries) pks.push_back(kv.first);
         std::sort(pks.begin(), pks.end());
         for (int64_t pk : pks) {
-            const OverlayEntry& e = ot->second.entries.at(pk);
+            OverlayEntry& e = ot->second.entries.at(pk);
             if (e.deleted) {
                 appendFrame(OP_DELETE, [&]() {
                     putU32(payload, tableId);
@@ -620,6 +648,7 @@ void Engine::buildPayload(std::vector<uint8_t>& payload) {
                     putU32(payload, tableId);
                     encodeRowBody(*schema, e.row, payload);
                 });
+                upserts.push_back(&e.row);
             }
         }
     };
@@ -650,7 +679,9 @@ void Engine::buildPayload(std::vector<uint8_t>& payload) {
     }
 }
 
-void Engine::applyPayload(const std::vector<uint8_t>& payload, uint64_t payloadOffset) {
+void Engine::applyPayload(const std::vector<uint8_t>& payload, uint64_t payloadOffset,
+                          const std::vector<Row*>* committedRows) {
+    size_t upsert = 0;
     const uint8_t* p = payload.data();
     const uint8_t* end = p + payload.size();
     while (p < end) {
@@ -672,17 +703,21 @@ void Engine::applyPayload(const std::vector<uint8_t>& payload, uint64_t payloadO
             if (it == tables_.end()) fail("internal_error", "row for unknown table");
             TableData* t = it->second.get();
             const uint8_t* rowStart = p;
-            if (t->cached) {
+            const uint32_t bodySize = static_cast<uint32_t>(frameEnd - rowStart);
+            if (t->cached && committedRows) {
+                // The WAL bytes are durable. Adopt the already validated row
+                // from the transaction without decoding and allocating it again.
+                applyUpsertRow(tableId, *committedRows->at(upsert), payloadOffset + frameStart, bodySize);
+            } else if (t->cached) {
                 Row row = decodeRowBody(t->schema, p, frameEnd);
-                uint32_t bodySize = static_cast<uint32_t>(frameEnd - rowStart);
                 applyUpsertRow(tableId, row, payloadOffset + frameStart, bodySize);
             } else {
                 if (frameEnd - p < 8) fail("internal_error", "corrupt row key");
                 const uint8_t* q = rowStart;
                 int64_t pk = getI64(q);
-                uint32_t bodySize = static_cast<uint32_t>(frameEnd - rowStart);
                 applyUpsertRef(tableId, pk, payloadOffset + frameStart, bodySize);
             }
+            ++upsert;
         } else if (type == OP_DELETE) {
             if (frameEnd - p < 12) fail("internal_error", "corrupt delete");
             uint32_t tableId = getU32(p);

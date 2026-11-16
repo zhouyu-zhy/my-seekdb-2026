@@ -734,8 +734,9 @@ private:
 
 }  // namespace
 
-std::vector<double> parseVectorText(const std::string& text) {
+std::vector<double> parseVectorText(const std::string& text, size_t expectedSize) {
     std::vector<double> out;
+    out.reserve(expectedSize < text.size() / 2 ? expectedSize : text.size() / 2);
     size_t i = 0;
     auto skipws = [&]() {
         while (i < text.size() && std::isspace(static_cast<unsigned char>(text[i]))) ++i;

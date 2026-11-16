@@ -59,7 +59,7 @@ Value valueForColumn(const Column& c, const Literal& lit) {
     } else {
         std::vector<double> nums;
         if (lit.kind == Literal::STR) {
-            nums = parseVectorText(lit.s);
+            nums = parseVectorText(lit.s, c.length);
         } else if (lit.kind == Literal::VECLIT) {
             nums = lit.v;
         } else {
@@ -278,6 +278,7 @@ struct Cand {
     std::vector<SortKey> keys;
     int64_t pk = 0;
     double dist = 0;
+    const Row* cachedRow = nullptr;
 };
 
 OutVal valueToOut(const Value& v, ColType type) {
@@ -371,11 +372,12 @@ void Engine::discardTxn() {
 void Engine::commitTxn() {
     if (!txn_.active) return;
     std::vector<uint8_t> payload;
-    buildPayload(payload);
+    std::vector<Row*> upserts;
+    buildPayload(payload, upserts);
     if (!payload.empty()) {
         uint64_t blockStart = 0, payloadStart = 0;
         appendBlock(payload, &blockStart, &payloadStart);
-        applyPayload(payload, payloadStart);
+        applyPayload(payload, payloadStart, &upserts);
     }
     txn_ = Txn{};
     implicit_ = false;
@@ -881,6 +883,7 @@ QueryResult Engine::execSelect(const SelectStmt& st, const std::string& searchMo
 
     TableData* base = tableById(schema->id);
     const bool noOverlay = txn_.tables.find(schema->id) == txn_.tables.end();
+    const bool cachedScan = base && base->cached && noOverlay;
     std::vector<int8_t> querySketch;
     double sketchCutoff = 0;
     auto refreshSketchCutoff = [&]() {
@@ -890,7 +893,7 @@ QueryResult Engine::execSelect(const SelectStmt& st, const std::string& searchMo
         sketchCutoff = upper * upper;
     };
 #if defined(__AVX2__) && defined(__FMA__)
-    if (topk && base && base->cached && noOverlay && base->rows.size() >= 512) {
+    if (topk && cachedScan && base->rows.size() >= 512) {
         const size_t dim = order[0].vec.size();
         if (dim >= 32 && dim <= 4096 && base->rows.size() <= base->vectorSketch.max_size() / dim) {
             if (!base->sketchValid) buildSketch(*base, static_cast<size_t>(order[0].col), dim);
@@ -917,7 +920,6 @@ QueryResult Engine::execSelect(const SelectStmt& st, const std::string& searchMo
 
     auto process = [&](const Row& row) {
         if (hasWhere && !passPreds(preds, row)) return;
-        int64_t pk = row[static_cast<size_t>(schema->pk)].i;
         if (topk) {
 #if defined(__AVX2__) && defined(__FMA__)
             if (!querySketch.empty() && heap.size() >= k) {
@@ -928,22 +930,20 @@ QueryResult Engine::execSelect(const SelectStmt& st, const std::string& searchMo
 #endif
             double d;
             if (!measure(row[static_cast<size_t>(order[0].col)].v.data(), order[0].vec, d)) return;
+            const int64_t pk = row[static_cast<size_t>(schema->pk)].i;
             if (heap.size() < k || (d < heap.top().dist || (d == heap.top().dist && pk < heap.top().pk))) {
                 Cand c;
                 c.pk = pk;
                 c.dist = d;
-                c.vals = project(row);
-                SortKey sk;
-                sk.kind = 2;
-                sk.d = d;
-                c.keys.push_back(std::move(sk));
+                if (cachedScan) c.cachedRow = &row;
+                else c.vals = project(row);
                 if (heap.size() >= k && k > 0) heap.pop();
                 if (k > 0) heap.push(std::move(c));
                 refreshSketchCutoff();
             }
         } else {
             Cand c;
-            c.pk = pk;
+            c.pk = row[static_cast<size_t>(schema->pk)].i;
             c.vals = project(row);
             if (!order.empty()) c.keys = buildKeys(row);
             all.push_back(std::move(c));
@@ -951,7 +951,7 @@ QueryResult Engine::execSelect(const SelectStmt& st, const std::string& searchMo
     };
 
     bool earlyLimit = st.hasLimit && order.empty() && limit > 0;
-    if (base && base->cached && noOverlay) {
+    if (cachedScan) {
         const auto equality = std::find_if(preds.begin(), preds.end(), [](const Pred& p) {
             return p.op == 0;
         });
@@ -1005,7 +1005,9 @@ QueryResult Engine::execSelect(const SelectStmt& st, const std::string& searchMo
         }
         return a.pk < b.pk;
     };
-    if (order.empty()) {
+    if (topk) {
+        std::sort(all.begin(), all.end(), better);
+    } else if (order.empty()) {
         std::sort(all.begin(), all.end(), [](const Cand& a, const Cand& b) { return a.pk < b.pk; });
     } else {
         std::sort(all.begin(), all.end(), lessCand);
@@ -1018,7 +1020,10 @@ QueryResult Engine::execSelect(const SelectStmt& st, const std::string& searchMo
     r.hasRows = true;
     for (const ItemPlan& p : items) r.columns.push_back(p.name);
     r.rows.reserve(all.size());
-    for (Cand& c : all) r.rows.push_back(std::move(c.vals));
+    for (Cand& c : all) {
+        if (c.cachedRow) r.rows.push_back(project(*c.cachedRow));
+        else r.rows.push_back(std::move(c.vals));
+    }
     return r;
 }
 

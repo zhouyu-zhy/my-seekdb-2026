@@ -18,20 +18,23 @@
 /* Degree of the graph that is searched. Kept equal to the contest baseline so
  * the query path (and its cost) is unchanged. */
 #define SK_GRAPH_DEGREE 128
-/* NN-descent fallback knobs: 128 intermediate degree x 50 iterations keeps the
+/* NN-descent fallback knobs: 128 intermediate degree x 45 iterations keeps the
  * graph quality at baseline level while roughly halving the build time. */
-#define SK_NN_ITER 50
+#define SK_NN_ITER 45
 #define SK_IVF_MIN_N 4096
-/* Use bounded staging when the existing full-matrix upload would be large. */
+/* Use bounded staging when the existing full-matrix upload would be large. The
+ * k-means sample and the upload batch are separate: a small sample keeps
+ * centroid training cheap, while a wide batch amortises the extend sync. */
 #define SK_IVF_DIRECT_MAX_DIM 160
 #define SK_IVF_MAX_DIM 512
-#define SK_IVF_UPLOAD_ROWS 16384
+#define SK_IVF_SAMPLE_ROWS 16384
+#define SK_IVF_UPLOAD_ROWS 65536
 #define SK_QCHECK_WIDE_MIN 0.99
 /* Sampled quality gate for the fast path (see sk_build_ivf_graph). */
 #define SK_QCHECK_MIN 0.94
 #define SK_SAMPLE 256
 #define SK_EXACT_K 32
-#define SK_CHUNK 1024
+#define SK_CHUNK 4096
 /* Above this dimension the device copy of the dataset that the CAGRA index is
  * built over is kept in FP16 (half of the FP32 footprint). The contest allows
  * internal FP16 as long as the external FP32 semantics and the recall gates
@@ -121,11 +124,13 @@ static int sk_build_nn_descent(sk_cuvs_index *h, const float *base, long n, long
 static int sk_build_staged_ivf(cuvsResources_t res, cuvsIvfFlatIndexParams_t params,
                                cuvsIvfFlatIndex_t index, const float *base, long n, long dim)
 {
-  const long capacity = n < SK_IVF_UPLOAD_ROWS ? n : SK_IVF_UPLOAD_ROWS;
+  const long sample_rows = n < SK_IVF_SAMPLE_ROWS ? n : SK_IVF_SAMPLE_ROWS;
+  const long batch_rows = n < SK_IVF_UPLOAD_ROWS ? n : SK_IVF_UPLOAD_ROWS;
   const size_t row_bytes = (size_t)dim * sizeof(float);
-  const size_t vector_bytes = (size_t)capacity * row_bytes;
-  const size_t id_bytes = (size_t)capacity * sizeof(int64_t);
-  float *sample = (float *)malloc(vector_bytes);
+  const size_t sample_bytes = (size_t)sample_rows * row_bytes;
+  const size_t batch_bytes = (size_t)batch_rows * row_bytes;
+  const size_t id_bytes = (size_t)batch_rows * sizeof(int64_t);
+  float *sample = (float *)malloc(sample_bytes);
   int64_t *ids = (int64_t *)malloc(id_bytes);
   void *vectors_device = NULL;
   void *ids_device = NULL;
@@ -134,15 +139,15 @@ static int sk_build_staged_ivf(cuvsResources_t res, cuvsIvfFlatIndexParams_t par
   long vector_shape[2];
   int64_t id_shape = 0;
   if (!sample || !ids ||
-      cuvsRMMAlloc(res, &vectors_device, vector_bytes) != CUVS_SUCCESS ||
+      cuvsRMMAlloc(res, &vectors_device, batch_bytes) != CUVS_SUCCESS ||
       cuvsRMMAlloc(res, &ids_device, id_bytes) != CUVS_SUCCESS) goto done;
-  for (long row = 0; row < capacity; ++row) {
-    const size_t source = (size_t)row * (size_t)n / (size_t)capacity;
+  for (long row = 0; row < sample_rows; ++row) {
+    const size_t source = (size_t)row * (size_t)n / (size_t)sample_rows;
     memcpy(sample + (size_t)row * dim, base + source * dim, row_bytes);
   }
-  if (cudaMemcpy(vectors_device, sample, vector_bytes, cudaMemcpyDefault) != cudaSuccess) goto done;
+  if (cudaMemcpy(vectors_device, sample, sample_bytes, cudaMemcpyDefault) != cudaSuccess) goto done;
   free(sample); sample = NULL;
-  sk_mk_tensor(&vectors, vector_shape, vectors_device, capacity, dim, kDLFloat, 32, 1);
+  sk_mk_tensor(&vectors, vector_shape, vectors_device, sample_rows, dim, kDLFloat, 32, 1);
   params->add_data_on_build = false;
   params->kmeans_trainset_fraction = 1.0;
   if (cuvsIvfFlatBuild(res, params, &vectors, index) != CUVS_SUCCESS ||
@@ -155,8 +160,8 @@ static int sk_build_staged_ivf(cuvsResources_t res, cuvsIvfFlatIndexParams_t par
   indices.dl_tensor.dtype.bits = 64;
   indices.dl_tensor.dtype.lanes = 1;
   indices.dl_tensor.shape = &id_shape;
-  for (long begin = 0; begin < n; begin += capacity) {
-    const long rows = n - begin < capacity ? n - begin : capacity;
+  for (long begin = 0; begin < n; begin += batch_rows) {
+    const long rows = n - begin < batch_rows ? n - begin : batch_rows;
     for (long row = 0; row < rows; ++row) ids[row] = begin + row;
     if (cudaMemcpy(vectors_device, base + (size_t)begin * dim,
                    (size_t)rows * row_bytes, cudaMemcpyDefault) != cudaSuccess ||
@@ -171,7 +176,7 @@ static int sk_build_staged_ivf(cuvsResources_t res, cuvsIvfFlatIndexParams_t par
 done:
   if (rc != 0 && vectors_device) cuvsStreamSync(res);
   if (ids_device) cuvsRMMFree(res, ids_device, id_bytes);
-  if (vectors_device) cuvsRMMFree(res, vectors_device, vector_bytes);
+  if (vectors_device) cuvsRMMFree(res, vectors_device, batch_bytes);
   free(ids);
   free(sample);
   return rc;

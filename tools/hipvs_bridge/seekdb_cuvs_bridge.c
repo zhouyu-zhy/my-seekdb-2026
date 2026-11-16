@@ -16,9 +16,8 @@
 /* Degree of the graph that is searched. Kept equal to the contest baseline so
  * the query path (and its cost) is unchanged. */
 #define SK_GRAPH_DEGREE 128
-/* NN-descent fallback knobs: 128 intermediate degree x 50 iterations keeps the
- * graph quality at baseline level while roughly halving the build time. */
-#define SK_NN_ITER 50
+/* Bound refinement work on the NN-descent path. */
+#define SK_NN_ITER 40
 #define SK_IVF_MIN_N 4096
 /* The fast path keeps one extra device copy of the dataset alive (cuVS builds
  * the index over the buffers we hand it). Above this dimension that copy is
@@ -444,7 +443,8 @@ int seekdb_cuvs_search(void* handle, const float* query, long nq, long topk,
     if (cuvsCagraSearchParamsCreate(&sp) != CUVS_SUCCESS) { rc=14; goto done; }
     {
       size_t required_itopk = (size_t)topk * 4;
-      if (required_itopk < 512) required_itopk = 512;
+      const size_t min_itopk = h->dim > SK_IVF_MAX_DIM && topk > 64 ? 640 : 512;
+      if (required_itopk < min_itopk) required_itopk = min_itopk;
       if (sp->itopk_size < required_itopk) sp->itopk_size = required_itopk;
       sp->search_width = 4;
     }

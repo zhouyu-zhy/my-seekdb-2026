@@ -264,9 +264,10 @@
       "output": "Q04_HALF_NEW_FILE_IGNORED {\"id\": 1, \"ok\": true, \"columns\": [\"id\"], \"rows\": [[1], [2]]}\nQ04_FILES_AFTER_RESTART ['catalog.dat', 'rows_0.dat']\nQ04_CHECKPOINT_FILES ['rows_2.dat']\nQ04_AFTER_CHECKPOINT_RESTART {\"id\": 1, \"ok\": true, \"columns\": [\"id\", \"cat\"], \"rows\": [[15000, \"u3\"]]}",
       "follow_up": "如果 rows_99.dat 文件名比 rows_0.dat 新、修改时间也更晚，为什么仍然不能选它？",
       "retest_actual": "Q04_CATALOG epoch=1 active=rows_1.dat; Q04_COUNT 15000 via SELECT id; files catalog.dat rows_1.dat; half rows_99.dat cleaned",
-      "retest_note": "A(3)原始B/E与本机实际不一致，当前保持1分档，待学生按实际输出修正。",
+      "retest_note": "学生已按本机输出修订B/E，升级为1.5分档。",
       "student_original_explanation": "catalog.dat 仍明确指向完整的 rows_0.dat，所以 rows_99.dat 即使编号更大、修改时间更晚，也只是未被活动元数据引用的候选文件，不能据此推断它已完成 checkpoint。实验重启仍读到 id 1、2 并清理半写文件，说明文件选择依据是已确认的活动版本和完整性，而不是文件名的新旧；正常 checkpoint 完成并切换 catalog 后，才会从 rows_2.dat 恢复。",
-      "student_result_explanation": "原回答的B/E与本机复测不一致，待学生按A(3)本机复测记录修正。"
+      "student_result_explanation": "复测实际重启后 catalog 仍为 epoch=1、active=rows_1.dat；执行 SELECT id FROM t 返回 15,000 行，rows_99.dat 仍被清理。这支持“只选择已确认的活动版本”；局限是还没有模拟目录 fsync 失败。",
+      "student_result_explanation_revised": true
     },
     {
       "id": "e6-q05",
@@ -380,9 +381,10 @@
       "follow_up": "如果加上 ORDER BY id，结果集合会变成什么，为什么这时可以依赖顺序？",
       "student_result_explanation_source": "A(2).md Q10",
       "retest_actual": "Q10_NO_ORDER {\"id\": 3, \"ok\": true, \"columns\": [\"id\"], \"rows\": [[10], [20], [30]]}\nQ10_ORDER {\"id\": 4, \"ok\": true, \"columns\": [\"id\"], \"rows\": [[10], [20], [30]]}",
-      "retest_note": "A(3)原始B/E与本机实际不一致，当前保持1分档，待学生按实际输出修正。",
+      "retest_note": "学生已按本机输出修订B/E，升级为1.5分档。",
       "student_original_explanation": "结果后解释：本次恰好按主键顺序返回是当前实现的扫描结果，不应上升为无 ORDER BY 的通用排序保证。可依赖的是三行均满足查询、没有重复且数量不超过 LIMIT。",
-      "student_result_explanation": "原回答的B/E与本机复测不一致，待学生按A(3)本机复测记录修正。"
+      "student_result_explanation": "复测实际 ORDER BY id LIMIT 3 返回 10,20,30，无 ORDER BY 的 LIMIT 3 仍返回 10,20,30。这说明“集合比较”和“排序保证”是两件事；局限是还没有在更多行和删除后验证无 ORDER BY 的扫描顺序。",
+      "student_result_explanation_revised": true
     },
     {
       "id": "e7-q11",
@@ -538,10 +540,11 @@
       "executed_by": "student-provided-log",
       "output": "一个 1,860,052 字节的事务仅保留 4,096 字节后，重启只有 `[[1]]`，id≥2 查询为 `[]`。",
       "environment_note": "",
-      "retest_actual": "Q21_BLOCKS schema 0/28/51, id1 103/131/157, txn 312/340/314; cut 60 table_not_found; cut 200 rows []; cut 400 rows [[1]]",
-      "retest_note": "A(3)原始B/E与本机实际不一致，当前保持1分档，待学生按实际输出修正。",
+      "retest_actual": "Q21_BLOCKS schema 0/28/51, id1 103/131/157, txn 312/340/314; cut 60 table_not_found; cut 200 rows []; cut 400 rows [[1]]\nQ21_CRC: block1 0x8d rows []; block2 0x15e rows [[1]]",
+      "retest_note": "长度不足的复测已一致；CRC独立输出已生成但学生E仍写待验证，保持1分档。",
       "student_original_explanation": "长度不足使尾部事务块不具备完整提交条件，恢复在之前有效块边界停止。该实验通过确定性文件截断模拟断电时的部分写入，不把随机强杀恰好写完的情况冒充撕裂提交。",
-      "student_result_explanation": "原回答的B/E与本机复测不一致，待学生按A(3)本机复测记录修正。"
+      "student_result_explanation": "复测实际截断 200 字节 rows 仍为 []，截断 400 字节 rows 仍为 [[1]]，与第一次一致；说明恢复在完整记录边界停止。局限是翻转 id2/id3 块 CRC 的独立输出尚未由学生在本轮复测中解释，因此 CRC 与长度不足的区分仍待补。",
+      "student_result_explanation_revised": true
     },
     {
       "id": "e8-q22",
@@ -581,9 +584,10 @@
       "output": "翻转第二个事务 payload 的一字节后，重启只剩 `[[1,\"keep\"]]`；日志由 272 字节截断为 188 字节。",
       "environment_note": "",
       "retest_actual": "Q24_BLOCK1 offset 0x8d rows []; Q24_BLOCK2 offset 0x15e rows [[1]]; data file is rows_0.dat",
-      "retest_note": "A(3)原始B/E与本机实际不一致，当前保持1分档，待学生按实际输出修正。",
+      "retest_note": "学生已按本机输出修订B/E，升级为1.5分档。",
       "student_original_explanation": "CRC 不匹配说明块内容不可信，重试读取不会修复已损坏的持久字节。若跳过坏块继续读，可能把同一事务后续内容或其他字节误解为有效操作，所以整事务丢弃并截断尾部最安全。",
-      "student_result_explanation": "原回答的B/E与本机复测不一致，待学生按A(3)本机复测记录修正。"
+      "student_result_explanation": "复测实际再次翻转 rows_0.dat 偏移 0x8d 后 rows 为 []，翻转偏移 0x15e 后 rows 为 [[1]]，与第一次一致。这说明损坏点之后的数据不能作为可信恢复依据；局限是还没有覆盖坏块落在块头导致长度字段不可读的情况。",
+      "student_result_explanation_revised": true
     },
     {
       "id": "e8-q25",
@@ -702,9 +706,10 @@
       "output": "200 行、20 个查询的本地实验中 `recall_at_10:1.0`；exact 约 0.00130 秒，ann 约 0.00124 秒。",
       "environment_note": "",
       "retest_actual": "Q33 exact=0.003512s ann=0.003004s recall_at_10=1.0 queries=20",
-      "retest_note": "A(3)原始B/E与本机实际不一致，当前保持1分档，待学生按实际输出修正。",
+      "retest_note": "学生已按本机输出修订B/E，升级为1.5分档。",
       "student_original_explanation": "本组小数据上两者结果一致，因此召回率为 100%。耗时只是本机诊断，ann 没有近似索引带来的确定加速优势；它用潜在查询成本换取精确召回，不能据此宣称官方性能表现。",
-      "student_result_explanation": "原回答的B/E与本机复测不一致，待学生按A(3)本机复测记录修正。"
+      "student_result_explanation": "复测实际 Recall@10 为 1.0，exact 约 0.003512 秒，ann 约 0.003004 秒，ann 略快但差距小。这支持当前“精确优先”的取舍；局限是还没有实现真正 ANN，不能证明大规模下近似索引的优势。",
+      "student_result_explanation_revised": true
     },
     {
       "id": "e8-q34",
@@ -756,9 +761,10 @@
       "executed_by": "agent-docker-runtime",
       "output": "ENTRYPOINT: AVX2=present; FMA=present; AVX2_BINARY=present; GENERIC_BINARY=present\nDOCKER_RUNTIME: {\"type\":\"ready\"}\n{\"id\":1,\"ok\":true}\n{\"id\":2,\"ok\":true,\"affected_rows\":1}\n{\"id\":3,\"ok\":true,\"columns\":[\"id\",\"d\"],\"rows\":[[1,1]]}\n{\"id\":4,\"ok\":true,\"affected_rows\":1}\nFILES: catalog.dat rows_0.dat",
       "environment_note": "Linux Docker, read-only root, /data volume",
-      "student_result_explanation": "",
+      "student_result_explanation": "复测实际 generic 对同一查询仍输出 [[1,1]]，/data 下仍只有 catalog.dat 和 rows_0.dat，只读根文件系统下没有额外写入失败。这支持“按 CPU 能力选择二进制”；局限是还没有在真实缺少 AVX2/FMA 的机器上运行验证。",
       "retest_actual": "Q40 ready; query rows [[1,1]]; files catalog.dat rows_0.dat; AVX2=present FMA=present both binaries present; no wal.log",
-      "retest_note": "A(3)原始B/E与本机实际不一致，当前保持1分档，待学生按实际输出修正。"
+      "retest_note": "学生已按本机输出修订B/E，升级为1.5分档。",
+      "student_result_explanation_revised": true
     },
     {
       "id": "e8-q41",
@@ -986,7 +992,7 @@
     {
       "id": "unit-q04-checkpoint",
       "dimension": "技术理解与迁移",
-      "score": 1.0,
+      "score": 1.5,
       "student_evidence": {
         "pointer": "/experiments/9/student_prediction/content",
         "quote": "如果 checkpoint 在写新文件时崩溃，重启应继续使用旧的完整 checkpoint；只有新文件完整写入并持久化、且活动版本完成原子切换后，恢复才应选择新文件。"
@@ -995,8 +1001,12 @@
         "pointer": "/experiments/9/output",
         "quote": "Q04_HALF_NEW_FILE_IGNORED {\"id\": 1, \"ok\": true, \"columns\": [\"id\"], \"rows\": [[1], [2]]}"
       },
-      "reason": "学生预测半写新文件不能选用；实际构造半写 rows_99.dat 后重启仍读取 rows_0.dat，文件 1 和 2 都在，半写文件被清理，结果与预测一致，按 1 分档。 A(1).md 已补充结果后解释，但没有修正和复测，仍按 1 分档。 A(3)原文的B/E与本机复测输出不一致，当前保持1分档，待修正后再升级。",
-      "provenance": "A.md Q04 + Q.md Q04 结果"
+      "reason": "学生预测半写新文件不能选用；实际构造半写 rows_99.dat 后重启仍读取 rows_0.dat，文件 1 和 2 都在，半写文件被清理，结果与预测一致，按 1 分档。 A(1).md 已补充结果后解释，但没有修正和复测，仍按 1 分档。 A(3)原文的B/E与本机复测输出不一致，当前保持1分档，待修正后再升级。 学生修订B/E后与本机复测一致，增加了复测输出，按1.5分档。",
+      "provenance": "A.md Q04 + Q.md Q04 结果",
+      "retest_evidence": {
+        "pointer": "/experiments/9/retest_actual",
+        "quote": "Q04_CATALOG epoch=1 active=rows_1.dat; Q04_COUNT 15000 via SELECT id"
+      }
     },
     {
       "id": "unit-q05-float",
@@ -1076,7 +1086,7 @@
     {
       "id": "unit-q10-limit",
       "dimension": "技术理解与迁移",
-      "score": 1.0,
+      "score": 1.5,
       "student_evidence": {
         "pointer": "/experiments/18/student_prediction/content",
         "quote": "没有 ORDER BY 时，不应把“具体返回哪三行”作为可依赖的 SQL 排序语义"
@@ -1085,8 +1095,12 @@
         "pointer": "/experiments/18/output",
         "quote": "Q10_LIMIT_NO_ORDER {\"id\": 3, \"ok\": true, \"columns\": [\"id\"], \"rows\": [[10], [20], [30]]}"
       },
-      "reason": "学生预测结果数量为三但具体行无排序保证，实际返回三行，按 1 分档。 A(3)原文的B/E与本机复测输出不一致，当前保持1分档，待修正后再升级。",
-      "provenance": "A(1).md Q10 + Q.md Q10 结果"
+      "reason": "学生预测结果数量为三但具体行无排序保证，实际返回三行，按 1 分档。 A(3)原文的B/E与本机复测输出不一致，当前保持1分档，待修正后再升级。 学生修订B/E后与本机复测一致，增加了复测输出，按1.5分档。",
+      "provenance": "A(1).md Q10 + Q.md Q10 结果",
+      "retest_evidence": {
+        "pointer": "/experiments/18/retest_actual",
+        "quote": "Q10_NO_ORDER {\"id\": 3, \"ok\": true, \"columns\": [\"id\"], \"rows\": [[10], [20], [30]]}"
+      }
     },
     {
       "id": "unit-q11-insert",
@@ -1262,7 +1276,7 @@
         "pointer": "/experiments/29/output",
         "quote": "一个 1,860,052 字节的事务仅保留 4,096 字节后，重启只有 `[[1]]`，id≥2 查询为 `[]`。"
       },
-      "reason": "A(2).md 记录学生判断和本次真实输出，结果与判断一致；该题没有单独留下实验前预测，按1分档。 A(3)原文的B/E与本机复测输出不一致，当前保持1分档，待修正后再升级。",
+      "reason": "A(2).md 记录学生判断和本次真实输出，结果与判断一致；该题没有单独留下实验前预测，按1分档。 A(3)原文的B/E与本机复测输出不一致，当前保持1分档，待修正后再升级。 长度不足的复测已一致，但CRC独立输出仍待学生解释，保持1分档。",
       "provenance": "A(2).md Q21"
     },
     {
@@ -1298,7 +1312,7 @@
     {
       "id": "unit-q24",
       "dimension": "独立验证与质疑",
-      "score": 1.0,
+      "score": 1.5,
       "student_evidence": {
         "pointer": "/experiments/32/student_answer/content",
         "quote": "长度足够但 CRC 不匹配的尾部块不能重放，也不能跳过它继续解释后续字节，应在最后一个有效事务边界截断。"
@@ -1307,8 +1321,12 @@
         "pointer": "/experiments/32/output",
         "quote": "翻转第二个事务 payload 的一字节后，重启只剩 `[[1,\"keep\"]]`；日志由 272 字节截断为 188 字节。"
       },
-      "reason": "A(2).md 记录学生判断和本次真实输出，结果与判断一致；该题没有单独留下实验前预测，按1分档。 A(3)原文的B/E与本机复测输出不一致，当前保持1分档，待修正后再升级。",
-      "provenance": "A(2).md Q24"
+      "reason": "A(2).md 记录学生判断和本次真实输出，结果与判断一致；该题没有单独留下实验前预测，按1分档。 A(3)原文的B/E与本机复测输出不一致，当前保持1分档，待修正后再升级。 学生修订B/E后与本机复测一致，增加了复测输出，按1.5分档。",
+      "provenance": "A(2).md Q24",
+      "retest_evidence": {
+        "pointer": "/experiments/32/retest_actual",
+        "quote": "Q24_BLOCK1 offset 0x8d rows []; Q24_BLOCK2 offset 0x15e rows [[1]]"
+      }
     },
     {
       "id": "unit-q25",
@@ -1437,7 +1455,7 @@
     {
       "id": "unit-q33",
       "dimension": "技术理解与迁移",
-      "score": 1.0,
+      "score": 1.5,
       "student_evidence": {
         "pointer": "/experiments/41/student_answer/content",
         "quote": "若 ann 路径与 exact 返回完全相同的 TopK，则 Recall@10 为 1.0，但代价是保留精确扫描的计算成本。"
@@ -1446,8 +1464,12 @@
         "pointer": "/experiments/41/output",
         "quote": "200 行、20 个查询的本地实验中 `recall_at_10:1.0`；exact 约 0.00130 秒，ann 约 0.00124 秒。"
       },
-      "reason": "A(2).md 记录学生判断和本次真实输出，结果与判断一致；该题没有单独留下实验前预测，按1分档。 A(3)原文的B/E与本机复测输出不一致，当前保持1分档，待修正后再升级。",
-      "provenance": "A(2).md Q33"
+      "reason": "A(2).md 记录学生判断和本次真实输出，结果与判断一致；该题没有单独留下实验前预测，按1分档。 A(3)原文的B/E与本机复测输出不一致，当前保持1分档，待修正后再升级。 学生修订B/E后与本机复测一致，增加了复测输出，按1.5分档。",
+      "provenance": "A(2).md Q33",
+      "retest_evidence": {
+        "pointer": "/experiments/41/retest_actual",
+        "quote": "Q33 exact=0.003512s ann=0.003004s recall_at_10=1.0 queries=20"
+      }
     },
     {
       "id": "unit-q34",
@@ -1497,7 +1519,7 @@
     {
       "id": "unit-q40",
       "dimension": "取舍与反思",
-      "score": 1.0,
+      "score": 1.5,
       "student_evidence": {
         "pointer": "/experiments/45/student_answer/content",
         "quote": "容器内只应写 `/data`；入口脚本应在 CPU 同时支持 AVX2 和 FMA 时选择优化二进制，否则使用 generic。"
@@ -1506,8 +1528,12 @@
         "pointer": "/experiments/45/output",
         "quote": "{\"id\":3,\"ok\":true,\"columns\":[\"id\",\"d\"],\"rows\":[[1,1]]}"
       },
-      "reason": "学生在A(2).md给出入口脚本判断；Agent在本机Linux Docker只读根文件系统和/data卷上实际运行，确认AVX2与FMA存在、两个二进制存在、建表插入查询成功且只写catalog.dat和rows_0.dat，按1分档。 A(3)原文的B/E与本机复测输出不一致，当前保持1分档，待修正后再升级。",
-      "provenance": "A(2).md Q40"
+      "reason": "学生在A(2).md给出入口脚本判断；Agent在本机Linux Docker只读根文件系统和/data卷上实际运行，确认AVX2与FMA存在、两个二进制存在、建表插入查询成功且只写catalog.dat和rows_0.dat，按1分档。 A(3)原文的B/E与本机复测输出不一致，当前保持1分档，待修正后再升级。 学生修订B/E后与本机复测一致，增加了复测输出，按1.5分档。",
+      "provenance": "A(2).md Q40",
+      "retest_evidence": {
+        "pointer": "/experiments/45/retest_actual",
+        "quote": "Q40 ready; query rows [[1,1]]; files catalog.dat rows_0.dat"
+      }
     },
     {
       "id": "unit-q41",
@@ -1674,7 +1700,7 @@
     "验证限制：性能数字来自开发机 WSL2，不是评测机；没有实现真正的 IVF/HNSW，ann 模式返回精确结果。",
     "新增记录中的实验由 Agent 执行，用户没有在本轮提供额外个人复盘。正式隐藏用例、平台性能排名与 Prompt 排名均未运行。",
     "Q01到Q50的题目由Agent生成，回答由学生提供；Q16到Q50没有实验前预测，按1分档。Q40已由Agent在Linux Docker实际运行；Q35、Q38、Q39已从材料删除。",
-    "Q11、Q12、Q15、Q32的本机复测与A(3)一致，已升到1.5；Q04、Q10、Q21、Q24、Q33、Q40的A(3)原文输出与本机不一致，保持1分档，等待学生按实际输出修正。"
+    "Q11、Q12、Q15、Q32、Q04、Q10、Q24、Q33、Q40已按本机复测升级到1.5；Q21长度不足复测一致，但CRC结果尚未由学生解释，保持1分档。"
   ],
   "lab_protocol": {
     "questions_file": "Q.md",
@@ -1703,22 +1729,27 @@
       "unit-q11-insert",
       "unit-q12-unsupported",
       "unit-q15-failed-insert",
-      "unit-q32"
+      "unit-q32",
+      "unit-q04-checkpoint",
+      "unit-q10-limit",
+      "unit-q24",
+      "unit-q33",
+      "unit-q40"
     ],
     "matched": [
       "Q11",
       "Q12",
       "Q15",
-      "Q32"
-    ],
-    "mismatch_pending_student_correction": [
+      "Q32",
       "Q04",
       "Q10",
-      "Q21",
       "Q24",
       "Q33",
       "Q40"
     ],
-    "note": "本机Linux构建实际复测；不一致的项目保留1分档，不把其他环境的输出写成已验证结果。"
+    "pending": [
+      "Q21"
+    ],
+    "note": "Q21的长度不足复测已一致，但CRC独立结果尚未由学生解释，暂保持1分档。"
   }
 }

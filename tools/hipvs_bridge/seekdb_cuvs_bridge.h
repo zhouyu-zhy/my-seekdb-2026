@@ -23,6 +23,9 @@ void* seekdb_cuvs_build(const float* base, long n, long dim);
 int   seekdb_cuvs_search(void* handle, const float* query, long nq, long topk,
                          unsigned int* out_ids, float* out_dist);
 void  seekdb_cuvs_free(void* handle);
+/* Copy n*dim FP32 elements to output on the host. With NULL output, only
+ * validate that the native index has a lossless FP32 dataset. */
+int seekdb_cuvs_export_fp32(void* handle, float* output);
 int seekdb_cuvs_serialize(void* handle, const char* filename);
 void* seekdb_cuvs_deserialize(const char* filename, long n, long dim);
 #ifdef __cplusplus

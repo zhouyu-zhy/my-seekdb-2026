@@ -628,6 +628,35 @@ void seekdb_cuvs_free(void* handle)
   free(h);
 }
 
+int seekdb_cuvs_export_fp32(void *handle, float *output)
+{
+  sk_cuvs_index *index = (sk_cuvs_index *)handle;
+  if (!index || index->f16 || !index->idx || index->n <= 0 || index->dim <= 0) return 1;
+
+  DLManagedTensor source = {0};
+  const cuvsError_t status = cuvsCagraIndexGetDataset(index->idx, &source);
+  const DLTensor *data = &source.dl_tensor;
+  int rc = 1;
+  if (status == CUVS_SUCCESS && data->data && data->ndim == 2 && data->shape &&
+      data->shape[0] == index->n && data->shape[1] == index->dim &&
+      data->dtype.code == kDLFloat && data->dtype.bits == 32 && data->dtype.lanes == 1 &&
+      data->byte_offset == 0 &&
+      (!data->strides || (data->strides[0] >= index->dim && data->strides[1] == 1))) {
+    if (!output) {
+      rc = 0;
+    } else {
+      DLManagedTensor destination;
+      long shape[2];
+      sk_mk_tensor(&destination, shape, output, index->n, index->dim, kDLFloat, 32, 0);
+      const cuvsError_t copied = cuvsMatrixCopy(index->res, &source, &destination);
+      const cuvsError_t synced = cuvsStreamSync(index->res);
+      rc = copied == CUVS_SUCCESS && synced == CUVS_SUCCESS ? 0 : 1;
+    }
+  }
+  if (source.deleter) source.deleter(&source);
+  return rc;
+}
+
 int seekdb_cuvs_serialize(void* handle, const char* filename)
 {
   sk_cuvs_index* index = (sk_cuvs_index*)handle;

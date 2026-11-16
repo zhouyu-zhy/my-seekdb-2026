@@ -177,30 +177,51 @@ done:
   return rc;
 }
 
+static int sk_cuvs_search(void *handle, const float *query, long nq, long topk,
+                          unsigned int *out_ids, float *out_dist, enum cuvsCagraSearchAlgo algo);
+
 /* Check the final CAGRA traversal against full-probe neighbors on a second
- * sample. A sparse local graph can still have good multi-hop recall. */
+ * sample. Batch the same queries using the multi-CTA algorithm selected for
+ * individual requests. */
 static int sk_validate_cagra(sk_cuvs_index *h, const float *queries, const long long *truth, long stride)
 {
-  const long topk = 100;
-  const long sampled = SK_SAMPLE / 4;
-  unsigned results[100];
+  enum { topk = 100, batch = 16, sample_step = 4 };
+  const long sampled = SK_SAMPLE / sample_step;
+  const size_t row_bytes = (size_t)h->dim * sizeof(float);
+  float *batch_queries = (float *)malloc(batch * row_bytes);
+  if (!batch_queries) return 0;
+
+  unsigned results[batch * topk];
   long hits10 = 0, hits100 = 0;
-  for (long row = 0; row < SK_SAMPLE; row += 4) {
-    const long long *expected = truth + row * stride;
-    /* Use the same single-query kernel selection as regular SQL searches. */
-    if (seekdb_cuvs_search(h, queries + row * h->dim, 1, topk, results, NULL) != 0) return 0;
-    for (long k = 0; k < topk; ++k) {
-      if (expected[k] < 0 || expected[k] >= h->n) continue;
-      for (long j = 0; j < topk; ++j) {
-        if (results[j] == (unsigned)expected[k]) {
-          ++hits100;
-          if (k < 10 && j < 10) ++hits10;
-          break;
+  int complete = 1;
+  for (long start = 0; start < sampled; start += batch) {
+    const long rows = sampled - start < batch ? sampled - start : batch;
+    for (long row = 0; row < rows; ++row) {
+      const long sample_row = (start + row) * sample_step;
+      memcpy(batch_queries + row * h->dim, queries + sample_row * h->dim, row_bytes);
+    }
+    if (sk_cuvs_search(h, batch_queries, rows, topk, results, NULL, MULTI_CTA) != 0) {
+      complete = 0;
+      break;
+    }
+    for (long row = 0; row < rows; ++row) {
+      const long sample_row = (start + row) * sample_step;
+      const long long *expected = truth + sample_row * stride;
+      const unsigned *found = results + row * topk;
+      for (long k = 0; k < topk; ++k) {
+        if (expected[k] < 0 || expected[k] >= h->n) continue;
+        for (long j = 0; j < topk; ++j) {
+          if (found[j] == (unsigned)expected[k]) {
+            ++hits100;
+            if (k < 10 && j < 10) ++hits10;
+            break;
+          }
         }
       }
     }
   }
-  return hits10 * 1000 >= sampled * 10 * 995 &&
+  free(batch_queries);
+  return complete && hits10 * 1000 >= sampled * 10 * 995 &&
          hits100 * 1000 >= sampled * topk * 995;
 }
 
@@ -560,8 +581,8 @@ fail:
   return NULL;
 }
 
-int seekdb_cuvs_search(void* handle, const float* query, long nq, long topk,
-                       unsigned int* out_ids, float* out_dist)
+static int sk_cuvs_search(void *handle, const float *query, long nq, long topk,
+                          unsigned int *out_ids, float *out_dist, enum cuvsCagraSearchAlgo algo)
 {
   sk_cuvs_index* h = (sk_cuvs_index*)handle;
   if (!h || !query || !out_ids || nq <= 0 || topk <= 0 || h->dim <= 0) return 1;
@@ -639,6 +660,7 @@ int seekdb_cuvs_search(void* handle, const float* query, long nq, long topk,
       if (required_itopk < 512) required_itopk = 512;
       sp->itopk_size = h->default_itopk > required_itopk ? h->default_itopk : required_itopk;
       sp->search_width = 4;
+      sp->algo = algo;
     }
     cuvsFilter f; f.type=NO_FILTER; f.addr=(uintptr_t)0;
     if (cuvsCagraSearch(h->res, sp, h->idx, &qt, &nt, &dt, f) != CUVS_SUCCESS) { rc=15; goto done; }
@@ -659,6 +681,12 @@ done:
   }
   pthread_mutex_unlock(&h->search_mutex);
   return rc;
+}
+
+int seekdb_cuvs_search(void *handle, const float *query, long nq, long topk,
+                      unsigned int *out_ids, float *out_dist)
+{
+  return sk_cuvs_search(handle, query, nq, topk, out_ids, out_dist, AUTO);
 }
 
 void seekdb_cuvs_free(void* handle)

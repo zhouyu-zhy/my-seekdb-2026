@@ -260,14 +260,10 @@ void appendJsonString(std::string& out, const std::string& s) {
 
 std::string formatDouble(double v) {
     if (!std::isfinite(v)) v = 0.0;
-    if (v == 0.0) return "0.0";
+    if (v == 0.0) return "0";
     char buf[64];
     std::snprintf(buf, sizeof(buf), "%.17g", v);
-    std::string s(buf);
-    if (s.find('.') == std::string::npos && s.find('e') == std::string::npos && s.find('E') == std::string::npos) {
-        s += ".0";
-    }
-    return s;
+    return std::string(buf);
 }
 
 std::string idJson(const JValue* id) {

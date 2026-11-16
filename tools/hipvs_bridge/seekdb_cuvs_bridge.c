@@ -28,13 +28,14 @@
 #define SK_IVF_DIRECT_MAX_DIM 160
 #define SK_IVF_MAX_DIM 512
 #define SK_IVF_SAMPLE_ROWS 16384
-#define SK_IVF_UPLOAD_ROWS 65536
+#define SK_IVF_UPLOAD_ROWS 32768
 #define SK_QCHECK_WIDE_MIN 0.99
 /* Sampled quality gate for the fast path (see sk_build_ivf_graph). */
 #define SK_QCHECK_MIN 0.94
 #define SK_SAMPLE 256
 #define SK_EXACT_K 32
-#define SK_CHUNK 4096
+#define SK_CHUNK 2048
+#define SK_CHUNK_WIDE 1024
 /* Above this dimension the device copy of the dataset that the CAGRA index is
  * built over is kept in FP16 (half of the FP32 footprint). The contest allows
  * internal FP16 as long as the external FP32 semantics and the recall gates
@@ -250,6 +251,7 @@ static int sk_build_ivf_graph(sk_cuvs_index *h, const float *base, long n, long 
   int idx_ready = 0, validate_search = 0;
   const int use_f16 = (dim > SK_F16_DIM);
   const int staged = dim > SK_IVF_DIRECT_MAX_DIM;
+  const long chunk = staged ? SK_CHUNK_WIDE : SK_CHUNK;
   const long exact_k = staged ? 101 : SK_EXACT_K;  /* one entry can be the query itself */
   const size_t graph_bytes = sizeof(unsigned) * (size_t)n * gd;
 
@@ -404,21 +406,21 @@ static int sk_build_ivf_graph(sk_cuvs_index *h, const float *base, long n, long 
   /* ---- full self-kNN, chunked, written straight into the device graph ---- */
   if (!staged && cuvsRMMAlloc(h->res, (void **)&dgraph, graph_bytes) != CUVS_SUCCESS) goto done;
   if (use_f16) {
-    if (cuvsRMMAlloc(h->res, (void **)&dqc16, 2 * (size_t)SK_CHUNK * dim) != CUVS_SUCCESS) goto done;
-    hch = (unsigned short *)malloc(2 * (size_t)SK_CHUNK * dim);
+    if (cuvsRMMAlloc(h->res, (void **)&dqc16, 2 * (size_t)chunk * dim) != CUVS_SUCCESS) goto done;
+    hch = (unsigned short *)malloc(2 * (size_t)chunk * dim);
     if (hch == 0) goto done;
   } else {
-    if (cuvsRMMAlloc(h->res, (void **)&dqc, sizeof(float) * (size_t)SK_CHUNK * dim) != CUVS_SUCCESS) goto done;
+    if (cuvsRMMAlloc(h->res, (void **)&dqc, sizeof(float) * (size_t)chunk * dim) != CUVS_SUCCESS) goto done;
   }
-  if (cuvsRMMAlloc(h->res, (void **)&dnc, sizeof(long long) * (size_t)SK_CHUNK * K) != CUVS_SUCCESS) goto done;
-  if (cuvsRMMAlloc(h->res, (void **)&ddc, sizeof(float) * (size_t)SK_CHUNK * K) != CUVS_SUCCESS) goto done;
-  hnc = (long long *)malloc(sizeof(long long) * (size_t)SK_CHUNK * K);
-  hgraph = (unsigned *)malloc(staged ? graph_bytes : sizeof(unsigned) * (size_t)SK_CHUNK * gd);
+  if (cuvsRMMAlloc(h->res, (void **)&dnc, sizeof(long long) * (size_t)chunk * K) != CUVS_SUCCESS) goto done;
+  if (cuvsRMMAlloc(h->res, (void **)&ddc, sizeof(float) * (size_t)chunk * K) != CUVS_SUCCESS) goto done;
+  hnc = (long long *)malloc(sizeof(long long) * (size_t)chunk * K);
+  hgraph = (unsigned *)malloc(staged ? graph_bytes : sizeof(unsigned) * (size_t)chunk * gd);
   if (hnc == 0 || hgraph == 0) goto done;
   {
     long start;
-    for (start = 0; start < n; start += SK_CHUNK) {
-      long rows = (n - start) < SK_CHUNK ? (n - start) : SK_CHUNK;
+    for (start = 0; start < n; start += chunk) {
+      long rows = (n - start) < chunk ? (n - start) : chunk;
       long r;
       DLManagedTensor qt, nt, dt;
       long as[2], bs[2], cs[2];
@@ -460,10 +462,10 @@ static int sk_build_ivf_graph(sk_cuvs_index *h, const float *base, long n, long 
   free(hnc); hnc = 0;
   if (!staged) { free(hgraph); hgraph = 0; }
   if (hch != 0) { free(hch); hch = 0; }
-  cuvsRMMFree(h->res, ddc, sizeof(float) * (size_t)SK_CHUNK * K); ddc = 0;
-  cuvsRMMFree(h->res, dnc, sizeof(long long) * (size_t)SK_CHUNK * K); dnc = 0;
-  cuvsRMMFree(h->res, dqc, sizeof(float) * (size_t)SK_CHUNK * dim); dqc = 0;
-  if (dqc16 != 0) { cuvsRMMFree(h->res, dqc16, 2 * (size_t)SK_CHUNK * dim); dqc16 = 0; }
+  cuvsRMMFree(h->res, ddc, sizeof(float) * (size_t)chunk * K); ddc = 0;
+  cuvsRMMFree(h->res, dnc, sizeof(long long) * (size_t)chunk * K); dnc = 0;
+  cuvsRMMFree(h->res, dqc, sizeof(float) * (size_t)chunk * dim); dqc = 0;
+  if (dqc16 != 0) { cuvsRMMFree(h->res, dqc16, 2 * (size_t)chunk * dim); dqc16 = 0; }
 
   /* Drop the IVF index (it holds its own dataset copy) before materialising the
    * CAGRA index so the VRAM peak stays close to the baseline one. */
@@ -521,14 +523,14 @@ done:
   if (hap_d != 0) { cuvsRMMFree(h->res, hap_d, sizeof(long long) * (size_t)SK_SAMPLE * gd); }
   if (had_d != 0) { cuvsRMMFree(h->res, had_d, sizeof(float) * (size_t)SK_SAMPLE * gd); }
   if (dqs != 0) { cuvsRMMFree(h->res, dqs, sizeof(float) * (size_t)SK_SAMPLE * dim); }
-  if (dqc != 0) { cuvsRMMFree(h->res, dqc, sizeof(float) * (size_t)SK_CHUNK * dim); }
-  if (dnc != 0) { cuvsRMMFree(h->res, dnc, sizeof(long long) * (size_t)SK_CHUNK * K); }
-  if (ddc != 0) { cuvsRMMFree(h->res, ddc, sizeof(float) * (size_t)SK_CHUNK * K); }
+  if (dqc != 0) { cuvsRMMFree(h->res, dqc, sizeof(float) * (size_t)chunk * dim); }
+  if (dnc != 0) { cuvsRMMFree(h->res, dnc, sizeof(long long) * (size_t)chunk * K); }
+  if (ddc != 0) { cuvsRMMFree(h->res, ddc, sizeof(float) * (size_t)chunk * K); }
   if (dgraph != 0) { cuvsRMMFree(h->res, dgraph, sizeof(unsigned) * (size_t)n * gd); }
   if (dx != 0) { cuvsRMMFree(h->res, dx, sizeof(float) * (size_t)n * dim); }
   if (dxh != 0) { cuvsRMMFree(h->res, dxh, 2 * (size_t)n * dim); }
   if (dqs16 != 0) { cuvsRMMFree(h->res, dqs16, 2 * (size_t)SK_SAMPLE * dim); }
-  if (dqc16 != 0) { cuvsRMMFree(h->res, dqc16, 2 * (size_t)SK_CHUNK * dim); }
+  if (dqc16 != 0) { cuvsRMMFree(h->res, dqc16, 2 * (size_t)chunk * dim); }
   if (hch != 0) { free(hch); }
   return rc;
 }

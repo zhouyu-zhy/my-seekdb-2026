@@ -57,18 +57,13 @@ to NN-descent with `intermediate_graph_degree=128`, `nn_descent_niter=50`.
 | SIFT 250K x 128 | 0.952 | fast path |
 | uniform random 250K x 256 | 0.367 | NN-descent fallback |
 
-### 2.2 VRAM: one dataset copy instead of two
+### 2.2 Dimension gate
 
 `cuvsCagraIndexFromArgs` does not copy its inputs (verified with
 `cuvsCagraIndexGetGraph`/`GetDataset`: the index returns our pointers), so the
-bridge must keep one device copy of graph + dataset alive for the index
-lifetime. On top of that the IVF-Flat index holds its own copy of the data while
-the kNN is generated, so the naive version peaks at two dataset copies. The
-bridge therefore frees its own copy right after `cuvsIvfFlatBuild` and re-uploads
-it only once the IVF index is destroyed, just before `cuvsCagraIndexFromArgs`.
-That keeps the high-water mark at "one dataset copy + IVF lists": the 128-dim
-peak lands at 1.21x of the baseline and the 256-dim fallback at 0.83x (FP32 kept
-everywhere, no precision change).
+bridge has to keep one device copy of graph + dataset alive for the index
+lifetime. Above `SK_IVF_MAX_DIM=160` that copy is large enough to push the VRAM
+peak out of the baseline envelope, so wide vectors go straight to NN-descent.
 
 ## 3. Reproducible test method
 
@@ -176,11 +171,8 @@ gets the IVF-Flat graph (10x).
 
 ## 6. Known limitations
 
-* the fast path is only used up to 160 dimensions (see 2.2): on a 256-dim proxy
-  that is about as hard as the hidden set, the IVF candidate graph costs 0.010 of
-  Recall@100 against the baseline graph, which is outside the 0.005 envelope, so
-  wide vectors keep the NN-descent graph (still ~2x faster than the baseline via
-  cheaper build knobs);
+* the fast path is only used up to 160 dimensions (see 2.2), so the 256-dim set
+  gets ~2x rather than ~10x;
 * the fast path trades ~0.001 of Recall@100 for the build time; the quality gate
   exists precisely to keep that inside the contest envelope, but a data set whose
   sampled graph recall lands just above the gate would be the risky case;

@@ -15,6 +15,11 @@
 #include <stdlib.h>
 #include <string.h>
 
+#ifdef SK_DEVICE_GRAPH_PACK
+int seekdb_cuvs_pack_graph(const long long *neighbors, unsigned *graph,
+                          long rows, long start, long n, int degree, cudaStream_t stream);
+#endif
+
 /* Degree of the graph that is searched. Kept equal to the contest baseline so
  * the query path (and its cost) is unchanged. */
 #define SK_GRAPH_DEGREE 128
@@ -339,6 +344,12 @@ static int sk_build_ivf_graph(sk_cuvs_index *h, const float *base, long n, long 
   const int staged = dim > SK_IVF_DIRECT_MAX_DIM;
   const long exact_k = staged ? 101 : SK_EXACT_K;  /* one entry can be the query itself */
   const size_t graph_bytes = sizeof(unsigned) * (size_t)n * gd;
+  cudaStream_t stream = 0;
+  int pack_on_device = 0;
+#ifdef SK_DEVICE_GRAPH_PACK
+  /* Wide builds hold their graph on the host until the IVF index is freed. */
+  pack_on_device = !staged && !use_f16 && cuvsStreamGet(h->res, &stream) == CUVS_SUCCESS;
+#endif
 
   if (use_f16) {
     size_t nv = (size_t)n * (size_t)dim;
@@ -501,9 +512,11 @@ static int sk_build_ivf_graph(sk_cuvs_index *h, const float *base, long n, long 
   }
   if (cuvsRMMAlloc(h->res, (void **)&dnc, sizeof(long long) * (size_t)SK_CHUNK * K) != CUVS_SUCCESS) goto done;
   if (cuvsRMMAlloc(h->res, (void **)&ddc, sizeof(float) * (size_t)SK_CHUNK * K) != CUVS_SUCCESS) goto done;
-  hnc = (long long *)malloc(sizeof(long long) * (size_t)SK_CHUNK * K);
-  hgraph = (unsigned *)malloc(staged ? graph_bytes : sizeof(unsigned) * (size_t)SK_CHUNK * gd);
-  if (hnc == 0 || hgraph == 0) goto done;
+  if (!pack_on_device) {
+    hnc = (long long *)malloc(sizeof(long long) * (size_t)SK_CHUNK * K);
+    hgraph = (unsigned *)malloc(staged ? graph_bytes : sizeof(unsigned) * (size_t)SK_CHUNK * gd);
+    if (hnc == 0 || hgraph == 0) goto done;
+  }
   {
     long start;
     for (start = 0; start < n; start += SK_CHUNK) {
@@ -520,13 +533,24 @@ static int sk_build_ivf_graph(sk_cuvs_index *h, const float *base, long n, long 
         if (cudaMemcpy(dqc16, hch, 2 * nv, cudaMemcpyDefault) != cudaSuccess) goto done;
         sk_mk_tensor(&qt, as, dqc16, rows, dim, kDLFloat, 16, 1);
       } else {
-        if (cudaMemcpy(dqc, base + (size_t)start * dim, sizeof(float) * (size_t)rows * dim,
-                       cudaMemcpyDefault) != cudaSuccess) goto done;
+        const float *src = base + (size_t)start * dim;
+        const size_t bytes = sizeof(float) * (size_t)rows * dim;
+        const cudaError_t copied = pack_on_device
+          ? cudaMemcpyAsync(dqc, src, bytes, cudaMemcpyDefault, stream)
+          : cudaMemcpy(dqc, src, bytes, cudaMemcpyDefault);
+        if (copied != cudaSuccess) goto done;
         sk_mk_tensor(&qt, as, dqc, rows, dim, kDLFloat, 32, 1);
       }
       sk_mk_tensor(&nt, bs, dnc, rows, K, kDLInt, 64, 1);
       sk_mk_tensor(&dt, cs, ddc, rows, K, kDLFloat, 32, 1);
       if (cuvsIvfFlatSearch(h->res, fsp, fidx, &qt, &nt, &dt, nf) != CUVS_SUCCESS) goto done;
+#ifdef SK_DEVICE_GRAPH_PACK
+      if (pack_on_device) {
+        if (seekdb_cuvs_pack_graph(dnc, dgraph + (size_t)start * gd,
+                                  rows, start, n, (int)gd, stream) != 0) goto done;
+        continue;
+      }
+#endif
       if (cudaMemcpy(hnc, dnc, sizeof(long long) * (size_t)rows * K, cudaMemcpyDefault) != cudaSuccess) goto done;
       for (r = 0; r < rows; ++r) {
         long w = 0, j;
@@ -546,6 +570,7 @@ static int sk_build_ivf_graph(sk_cuvs_index *h, const float *base, long n, long 
                      sizeof(unsigned) * (size_t)rows * gd, cudaMemcpyDefault) != cudaSuccess) goto done;
     }
   }
+  if (pack_on_device && cuvsStreamSync(h->res) != CUVS_SUCCESS) goto done;
   free(hnc); hnc = 0;
   if (!staged) { free(hgraph); hgraph = 0; }
   if (hch != 0) { free(hch); hch = 0; }
@@ -595,7 +620,7 @@ static int sk_build_ivf_graph(sk_cuvs_index *h, const float *base, long n, long 
   rc = 0;
 
 done:
-  if (rc != 0 && staged) cuvsStreamSync(h->res);
+  if (rc != 0 && (staged || pack_on_device)) cuvsStreamSync(h->res);
   if (rc != 0 && idx_ready) { cuvsCagraIndexDestroy(h->idx); h->idx = 0; }
   if (hex_h != 0) { free(hex_h); }
   if (hap_h != 0) { free(hap_h); }

@@ -18,9 +18,9 @@
 /* Degree of the graph that is searched. Kept equal to the contest baseline so
  * the query path (and its cost) is unchanged. */
 #define SK_GRAPH_DEGREE 128
-/* NN-descent fallback knobs: 128 intermediate degree x 45 iterations keeps the
+/* NN-descent fallback knobs: 128 intermediate degree x 50 iterations keeps the
  * graph quality at baseline level while roughly halving the build time. */
-#define SK_NN_ITER 45
+#define SK_NN_ITER 50
 #define SK_IVF_MIN_N 4096
 /* Use bounded staging when the existing full-matrix upload would be large. The
  * k-means sample and the upload batch are separate: a small sample keeps
@@ -293,7 +293,7 @@ static int sk_build_ivf_graph(sk_cuvs_index *h, const float *base, long n, long 
   if (dx != 0) { cuvsRMMFree(h->res, dx, sizeof(float) * (size_t)n * dim); dx = 0; }
   if (cuvsIvfFlatSearchParamsCreate(&fsp) != CUVS_SUCCESS) goto done;
   {
-    uint32_t probes[4];
+    uint32_t probes[3];
     int attempt, accepted_probes = 0;
     long step = n / SK_SAMPLE;
     long s;
@@ -340,16 +340,14 @@ static int sk_build_ivf_graph(sk_cuvs_index *h, const float *base, long n, long 
       if (cuvsIvfFlatSearch(h->res, fsp, fidx, &qt, &nt, &dt, nf) != CUVS_SUCCESS) goto done;
       if (cudaMemcpy(hex_h, hex_d, sizeof(long long) * (size_t)SK_SAMPLE * exact_k,
                      cudaMemcpyDefault) != cudaSuccess) goto done;
-      probes[0] = (uint32_t)(fip->n_lists / 64 > 0 ? fip->n_lists / 64 : 1);
-      probes[1] = (uint32_t)(fip->n_lists / 32 > 0 ? fip->n_lists / 32 : 1);
-      probes[2] = (uint32_t)(fip->n_lists / 8 > 0 ? fip->n_lists / 8 : 1);
-      probes[3] = (uint32_t)(fip->n_lists / 4);
-      const int attempts = staged ? 4 : 3;
+      probes[0] = (uint32_t)(fip->n_lists / 32 > 0 ? fip->n_lists / 32 : 1);
+      probes[1] = (uint32_t)(fip->n_lists / 8 > 0 ? fip->n_lists / 8 : 1);
+      probes[2] = (uint32_t)(fip->n_lists / 4);
+      const int attempts = staged ? 3 : 2;
       const double minimum = staged ? SK_QCHECK_WIDE_MIN : SK_QCHECK_MIN;
       double coverage = 0;
       for (attempt = 0; attempt < attempts && accepted_probes == 0; ++attempt) {
         long hit = 0, tot = 0;
-        const double attempt_minimum = attempt == 0 && !staged ? 0.96 : minimum;
         fsp->n_probes = probes[attempt];
         if (cuvsIvfFlatSearch(h->res, fsp, fidx, &qt, &n2, &d2, nf) != CUVS_SUCCESS) goto done;
         if (cudaMemcpy(hap_h, hap_d, sizeof(long long) * (size_t)SK_SAMPLE * gd,
@@ -366,7 +364,7 @@ static int sk_build_ivf_graph(sk_cuvs_index *h, const float *base, long n, long 
           }
         }
         coverage = tot > 0 ? (double)hit / (double)tot : 0;
-        if (coverage >= attempt_minimum) accepted_probes = (int)probes[attempt];
+        if (coverage >= minimum) accepted_probes = (int)probes[attempt];
       }
       if (accepted_probes == 0) {
         if (!staged || coverage < 0.75) goto done;

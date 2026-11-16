@@ -7,7 +7,7 @@
     "session_date": "2026-11-16",
     "repository": "https://github.com/zhouyu-zhy/my-seekdb-2026",
     "branch": "2026-competition-round2",
-    "note": "本文件记录同一次开发会话。user_prompts 中的用户消息为原文节选，GitHub token 已脱敏；role=agent 的条目和 experiments 中的命令/输出来自同一次会话的 Agent 执行与工具结果，未虚构学生发言、实验结果或学生理解。retrospective 由助手根据真实过程整理，学生于2026-11-16明确确认后作为本人复盘提交；Q01到Q05的学生预测来自学生自己的A.md，实际输出由Agent运行后写回Q.md。"
+    "note": "本文件记录同一次开发会话。user_prompts 中的用户消息为原文节选，GitHub token 已脱敏；role=agent 的条目和 experiments 中的命令/输出来自同一次会话的 Agent 执行与工具结果，未虚构学生发言、实验结果或学生理解。retrospective 由助手根据真实过程整理，学生于2026-11-16明确确认后作为本人复盘提交；Q01到Q05的预测和结果后解释来自学生A.md，Q06到Q15的预测来自学生A(1).md，实际输出由Agent运行后写回Q.md。"
   },
   "user_prompts": [
     {
@@ -162,7 +162,7 @@
       "command": "python3 exp_q01_q05.py q01",
       "output": "Q01_LIMIT3 {\"id\": 3, \"ok\": true, \"columns\": [\"id\", \"d\"], \"rows\": [[2, 1.0], [5, 1.0], [7, 1.0]]}\nQ01_LIMIT4 {\"id\": 4, \"ok\": true, \"columns\": [\"id\", \"d\"], \"rows\": [[2, 1.0], [5, 1.0], [7, 1.0], [10, 1.0]]}",
       "follow_up": "为什么 LIMIT 为 3 时不能返回主键 10 而排除主键 2，主键升序在这里解决了什么问题？",
-      "student_result_explanation": ""
+      "student_result_explanation": "实验中四条记录的完整并列顺序是 2、5、7、10，因此 LIMIT 3 必须截取 2、5、7，不能用主键 10 替换主键 2；LIMIT 4 时主键 10 才进入结果。主键升序不仅决定并列组内的展示顺序，也决定了 TopK 边界究竟保留哪些记录，使截断结果唯一且可复现。"
     },
     {
       "id": "e6-q02",
@@ -176,7 +176,7 @@
       "command": "python3 exp_q01_q05.py q02",
       "output": "Q02_FILTERED_TOPK {\"id\": 3, \"ok\": true, \"columns\": [\"id\", \"d\"], \"rows\": [[3, 10.0], [4, 11.0]]}\nQ02_FILTERED_FEWER {\"id\": 4, \"ok\": true, \"columns\": [\"id\", \"d\"], \"rows\": [[3, 10.0], [4, 11.0]]}\nQ02_ALL_TABLE_TOP2 {\"id\": 5, \"ok\": true, \"columns\": [\"id\", \"d\"], \"rows\": [[1, 0.0], [2, 0.10000000149011612]]}",
       "follow_up": "如果过滤后只有 1 条而 LIMIT 为 2，应该返回几条，为什么不能从全表补足到 2 条？",
-      "student_result_explanation": ""
+      "student_result_explanation": "全表 Top2 是不满足条件的 id 1、2，若之后再过滤会得到空结果；先过滤则正确得到 target 的 id 3、4。若过滤后只有一条而 LIMIT 为 2，也只能返回这一条，因为 LIMIT 是返回数量上限而不是必须凑满的数量，不能加入 other 分类的记录来补足两条，否则就违反 WHERE 语义。"
     },
     {
       "id": "e6-q03",
@@ -190,7 +190,7 @@
       "command": "python3 exp_q01_q05.py q03",
       "output": "Q03_AFTER_COMMITTED_KILL {\"id\": 1, \"ok\": true, \"columns\": [\"id\"], \"rows\": [[1]]}\nQ03_AFTER_UNCOMMITTED_KILL {\"id\": 1, \"ok\": true, \"columns\": [\"id\"], \"rows\": [[1]]}\nQ03_TORN_COMMIT_KILLED True ROWS 1 FIRST [[1]] LAST [[1]]",
       "follow_up": "恢复时如何判断一个块是完整的，为什么不能按行重放一个只写了一半的事务块？",
-      "student_result_explanation": ""
+      "student_result_explanation": "实验中已提交的 id 1 保留，未提交的 id 2、3 和撕裂大事务中的所有行都没有出现。恢复应根据块头声明的总长度确认整个块都存在，并同时验证 CRC 和有效提交标记，缺任一条件都不能把该块视为完整提交；若按行重放半块，就会把同一事务中恰好先写入的一部分操作错误地变成已提交数据，破坏事务“全部生效或全部不生效”的边界。"
     },
     {
       "id": "e6-q04",
@@ -204,7 +204,7 @@
       "command": "python3 exp_q01_q05.py q04",
       "output": "Q04_HALF_NEW_FILE_IGNORED {\"id\": 1, \"ok\": true, \"columns\": [\"id\"], \"rows\": [[1], [2]]}\nQ04_FILES_AFTER_RESTART ['catalog.dat', 'rows_0.dat']\nQ04_CHECKPOINT_FILES ['rows_2.dat']\nQ04_AFTER_CHECKPOINT_RESTART {\"id\": 1, \"ok\": true, \"columns\": [\"id\", \"cat\"], \"rows\": [[15000, \"u3\"]]}",
       "follow_up": "如果 rows_99.dat 文件名比 rows_0.dat 新、修改时间也更晚，为什么仍然不能选它？",
-      "student_result_explanation": ""
+      "student_result_explanation": "catalog.dat 仍明确指向完整的 rows_0.dat，所以 rows_99.dat 即使编号更大、修改时间更晚，也只是未被活动元数据引用的候选文件，不能据此推断它已完成 checkpoint。实验重启仍读到 id 1、2 并清理半写文件，说明文件选择依据是已确认的活动版本和完整性，而不是文件名的新旧；正常 checkpoint 完成并切换 catalog 后，才会从 rows_2.dat 恢复。"
     },
     {
       "id": "e6-q05",
@@ -218,6 +218,146 @@
       "command": "python3 exp_q01_q05.py q05",
       "output": "Q05_LARGE_DISTANCE {\"id\": 3, \"ok\": true, \"columns\": [\"id\", \"d\"], \"rows\": [[1, 2.0000000400817547e+20]]}\nQ05_COMPONENT {\"id\": 4, \"ok\": true, \"columns\": [\"id\", \"d\"], \"rows\": [[2, 16777216.00000003]]}\nQ05_OVERFLOW_REJECT {\"id\": 5, \"ok\": false, \"error\": {\"code\": \"invalid_vector\", \"message\": \"vector component is not a finite float32\"}}",
       "follow_up": "为什么查询向量也要先转成 float32，而不是保留 double 参与距离计算？",
+      "student_result_explanation": "大分量实验中的平方和由 double 承载，因此没有按 float 路径溢出，16777216 平方后加 1 的细小差异也能反映到最终距离中；1e39 则因无法表示为有限 float32 而被拒绝。查询向量先转成 float32，是为了与入库分量采用完全相同的舍入和溢出规则，否则存储侧已经量化、查询侧却保留 double 原值，会对同一逻辑输入计算出另一套距离，破坏题干规定的距离语义和结果可比性。"
+    },
+    {
+      "id": "e7-q06",
+      "title": "Q06 实验结果",
+      "question": "表里有 id 1 cat b，id 2 cat a，id 3 cat a，id 4 cat b，执行 ORDER BY cat 的结果顺序是什么？",
+      "student_prediction": {
+        "source": "A(1).md Q06",
+        "content": "预测：结果顺序应为 `(2,a)、(3,a)、(1,b)、(4,b)`。cat 相同的行之间按主键 id 升序排列。\n理由：普通 ORDER BY 首先按指定列排序，但相同 cat 无法确定先后，题干用主键升序作为统一的第二排序键。这样结果不会依赖插入顺序或物理扫描顺序。"
+      },
+      "executed_by": "agent",
+      "command": "python3 exp_q06_q15.py q06",
+      "output": "Q06_ORDER_TIES {\"id\": 3, \"ok\": true, \"columns\": [\"id\", \"cat\"], \"rows\": [[2, \"a\"], [3, \"a\"], [1, \"b\"], [4, \"b\"]]}\nQ06_ORDER_TIES_LIMIT2 {\"id\": 4, \"ok\": true, \"columns\": [\"id\", \"cat\"], \"rows\": [[2, \"a\"], [3, \"a\"]]}",
+      "follow_up": "如果 LIMIT 截断在 2、3 中间，应该保留谁，为什么？",
+      "student_result_explanation": ""
+    },
+    {
+      "id": "e7-q07",
+      "title": "Q07 实验结果",
+      "question": "VARCHAR(3) 下“中文”“abc”“😀😀😀”“abcd”哪些能插入，n 按字节还是 Unicode 码点算？",
+      "student_prediction": {
+        "source": "A(1).md Q07",
+        "content": "预测：“中文”“abc”和“😀😀😀”都可以插入 VARCHAR(3)，而“abcd”返回 `value_too_long`。这里的 n 按 Unicode 码点数量计算，不是按 UTF-8 字节数计算。\n理由：“中文”是两个码点，“abc”是三个码点，每个 😀 虽然占四个 UTF-8 字节，但只是一个 Unicode 码点，所以三个 emoji 仍符合长度 3。“abcd”有四个字符，超过定义长度。"
+      },
+      "executed_by": "agent",
+      "command": "python3 exp_q06_q15.py q07",
+      "output": "Q07_INSERT_TWO_CHARS {\"id\": 2, \"ok\": true, \"affected_rows\": 1}\nQ07_INSERT_ABC {\"id\": 3, \"ok\": true, \"affected_rows\": 1}\nQ07_INSERT_EMOJI3 {\"id\": 4, \"ok\": true, \"affected_rows\": 1}\nQ07_INSERT_ABCD {\"id\": 5, \"ok\": false, \"error\": {\"code\": \"value_too_long\", \"message\": \"string exceeds VARCHAR length\"}}\nQ07_ROWS {\"id\": 6, \"ok\": true, \"columns\": [\"id\", \"v\"], \"rows\": [[1, \"中文\"], [2, \"abc\"], [3, \"😀😀😀\"]]}",
+      "follow_up": "为什么 😀😀😀 算三个字符而不是十二个字节？",
+      "student_result_explanation": ""
+    },
+    {
+      "id": "e7-q08",
+      "title": "Q08 实验结果",
+      "question": "name 为“甲”“乙”“ab”时，ORDER BY name 的顺序是什么？",
+      "student_prediction": {
+        "source": "A(1).md Q08",
+        "content": "预测：升序结果应为 `ab、乙、甲`。按 UTF-8 字节比较和按 Unicode 码点比较在这个例子中结果一致，对合法 UTF-8 字符串通常也具有相同的码点顺序。\n理由：`ab` 以 U+0061 开头，乙是 U+4E59，甲是 U+7532，因此码点升序就是上述顺序。UTF-8 的编码结构保留了码点之间的大小关系，所以两种比较方式不会产生不同排序。"
+      },
+      "executed_by": "agent",
+      "command": "python3 exp_q06_q15.py q08",
+      "output": "Q08_UNICODE_ORDER {\"id\": 3, \"ok\": true, \"columns\": [\"id\", \"name\"], \"rows\": [[3, \"ab\"], [2, \"乙\"], [1, \"甲\"]]}",
+      "follow_up": "如果实现改成按 UTF-8 字节比较，这个例子会不会改变顺序？",
+      "student_result_explanation": ""
+    },
+    {
+      "id": "e7-q09",
+      "title": "Q09 实验结果",
+      "question": "插入 9007199254740993 和 9007199254740992 后，SELECT 输出 JSON 能否保持精确？",
+      "student_prediction": {
+        "source": "A(1).md Q09",
+        "content": "预测：JSON 输出应把两个 id 都写成十进制整数字面量，分别保持 9007199254740993 和 9007199254740992，数据库内部及序列化过程不能经过 double。若客户端直接按 JavaScript Number 解析，两者会失去区分，都会表示为 9007199254740992。\n理由：9007199254740993 已超过 JavaScript 的 `Number.MAX_SAFE_INTEGER`，Number 无法精确表示所有这样的整数。需要精确保留时，客户端应使用支持任意精度整数的解析方式，例如解析为 BigInt，而不能依赖普通 `JSON.parse` 后的 Number。"
+      },
+      "executed_by": "agent",
+      "command": "python3 exp_q06_q15.py q09",
+      "output": "Q09_BIGINT_PRECISION {\"id\": 3, \"ok\": true, \"columns\": [\"id\"], \"rows\": [[9007199254740992], [9007199254740993]]}",
+      "follow_up": "如果中间用 double 再序列化，较大的那个值会变成什么？",
+      "student_result_explanation": ""
+    },
+    {
+      "id": "e7-q10",
+      "title": "Q10 实验结果",
+      "question": "没有 ORDER BY 时执行 SELECT id FROM t LIMIT 3，返回哪 3 行有保证吗？",
+      "student_prediction": {
+        "source": "A(1).md Q10",
+        "content": "预测：没有 ORDER BY 时，不应把“具体返回哪三行”作为可依赖的 SQL 排序语义，但表中至少有十行时仍应恰好返回三行。题干的“按集合比较”表示评测不区分这三行的排列顺序，而不是允许少返、重复或改变行内容。\n理由：LIMIT 只限制结果数量，本身不提供排序键；没有 ORDER BY 时，实现可按自己的合法扫描顺序提前取得三行。集合比较只消除顺序要求，具体结果仍须满足查询和 LIMIT 语义。"
+      },
+      "executed_by": "agent",
+      "command": "python3 exp_q06_q15.py q10",
+      "output": "Q10_LIMIT_NO_ORDER {\"id\": 3, \"ok\": true, \"columns\": [\"id\"], \"rows\": [[10], [20], [30]]}",
+      "follow_up": "如果加上 ORDER BY id，结果集合会变成什么，为什么这时可以依赖顺序？",
+      "student_result_explanation": ""
+    },
+    {
+      "id": "e7-q11",
+      "title": "Q11 实验结果",
+      "question": "一条 INSERT 插入 5 行、第 4 行主键重复，前 3 行会写入吗？",
+      "student_prediction": {
+        "source": "A(1).md Q11",
+        "content": "预测：前三个已检查通过的行也不会写入，整条 INSERT 返回 `duplicate_primary_key`，本语句新增行数为零。不能只写前三行，因为一条多行 INSERT 是一个原子语句。\n理由：第四行重复说明整条语句违反主键唯一性，数据库应在应用任何修改前完成校验，或在失败时撤销本语句的全部暂存修改。否则调用方收到失败后还要自行清理部分数据，会破坏语句原子性和后续重试语义。"
+      },
+      "executed_by": "agent",
+      "command": "python3 exp_q06_q15.py q11",
+      "output": "Q11_DUPLICATE_MULTIROW {\"id\": 2, \"ok\": false, \"error\": {\"code\": \"duplicate_key\", \"message\": \"duplicate primary key\"}}\nQ11_ROWS_AFTER_FAILURE {\"id\": 3, \"ok\": true, \"columns\": [\"id\"], \"rows\": []}",
+      "follow_up": "如果实现逐行写入前 3 行再发现重复，客户端会看到什么不一致？",
+      "student_result_explanation": ""
+    },
+    {
+      "id": "e7-q12",
+      "title": "Q12 实验结果",
+      "question": "执行 JOIN 或 ALTER TABLE 返回什么错误？在 BEGIN 之后执行，事务还能继续吗？",
+      "student_prediction": {
+        "source": "A(1).md Q12",
+        "content": "预测：JOIN 和 ALTER TABLE 都应返回 `unsupported_statement`。如果错误发生在 BEGIN 之后，事务本身不应被自动提交或回滚，之前成功的修改仍保留在事务内，之后可以继续 COMMIT 或 ROLLBACK。\n理由：不支持语法只表示当前语句无法执行，不等于此前事务操作失效。失败语句不应产生部分修改，事务的最终取舍仍由客户端显式提交或回滚决定。"
+      },
+      "executed_by": "agent",
+      "command": "python3 exp_q06_q15.py q12",
+      "output": "Q12_JOIN_ERROR {\"id\": 4, \"ok\": false, \"error\": {\"code\": \"unsupported_sql\", \"message\": \"SQL feature is not supported\"}}\nQ12_ALTER_ERROR {\"id\": 5, \"ok\": false, \"error\": {\"code\": \"unsupported_sql\", \"message\": \"statement is not supported\"}}\nQ12_ROWS_IN_TXN {\"id\": 6, \"ok\": true, \"columns\": [\"id\"], \"rows\": [[1]]}\nQ12_ROWS_AFTER_COMMIT {\"id\": 8, \"ok\": true, \"columns\": [\"id\"], \"rows\": [[1]]}",
+      "follow_up": "为什么语句失败没有把整个事务一起回滚？",
+      "student_result_explanation": ""
+    },
+    {
+      "id": "e7-q13",
+      "title": "Q13 实验结果",
+      "question": "BEGIN 后 UPDATE 再 SELECT 同一行，看到新值还是旧值？ROLLBACK 后呢？",
+      "student_prediction": {
+        "source": "A(1).md Q13",
+        "content": "预测：事务内 SELECT 应看到 UPDATE 后的新值，ROLLBACK 后的 SELECT 应重新看到更新前的旧值。这就是事务的“读己之写”，但未提交修改不能变成已提交状态。\n理由：当前事务的查询需要合并已提交数据与自己的私有修改，因此能读到本事务刚写入的值。回滚会整体丢弃这些私有修改，不会把新值留在表或索引中。"
+      },
+      "executed_by": "agent",
+      "command": "python3 exp_q06_q15.py q13",
+      "output": "Q13_READ_OWN_WRITE {\"id\": 5, \"ok\": true, \"columns\": [\"value\"], \"rows\": [[20]]}\nQ13_AFTER_ROLLBACK {\"id\": 7, \"ok\": true, \"columns\": [\"value\"], \"rows\": [[10]]}",
+      "follow_up": "如果事务内读到旧值 10，会违反什么语义？",
+      "student_result_explanation": ""
+    },
+    {
+      "id": "e7-q14",
+      "title": "Q14 实验结果",
+      "question": "事务内更新向量后 SELECT 距离，再 ROLLBACK 后 SELECT 距离，两次结果相同吗？",
+      "student_prediction": {
+        "source": "A(1).md Q14",
+        "content": "预测：两次距离不一定相同；如果 UPDATE 改变了该行到查询点的距离，事务内应显示基于新向量计算的距离，ROLLBACK 后应显示基于旧向量计算的距离。事务内检索结果不会影响回滚后的结果。\n理由：事务内 TopK 必须读取本事务可见的新向量，而回滚会撤销该向量及其索引修改。回滚后的查询只能使用恢复后的已提交旧向量，不能复用事务内缓存的距离或候选结果。"
+      },
+      "executed_by": "agent",
+      "command": "python3 exp_q06_q15.py q14",
+      "output": "Q14_TXN_VECTOR {\"id\": 5, \"ok\": true, \"columns\": [\"d\"], \"rows\": [[10.0]]}\nQ14_ROLLBACK_VECTOR {\"id\": 7, \"ok\": true, \"columns\": [\"d\"], \"rows\": [[0.0]]}",
+      "follow_up": "如果回滚后的 TopK 复用事务内缓存的距离，会发生什么？",
+      "student_result_explanation": ""
+    },
+    {
+      "id": "e7-q15",
+      "title": "Q15 实验结果",
+      "question": "BEGIN 后插入 id 1，再插入 id 1 失败，COMMIT 后表里有几行？",
+      "student_prediction": {
+        "source": "A(1).md Q15",
+        "content": "预测：最后 COMMIT 后表里只有一行 id 1。第二次 INSERT 返回 `duplicate_primary_key`，但第一次成功插入仍保留在事务中，并随后续 COMMIT 一起生效。\n理由：第二次语句与事务内已经存在的 id 1 冲突，因此该失败语句本身不能增加或覆盖任何行。语句失败只回滚当前语句的修改，不会自动回滚整个显式事务，所以第一次插入不会因第二次失败而消失。"
+      },
+      "executed_by": "agent",
+      "command": "python3 exp_q06_q15.py q15",
+      "output": "Q15_SECOND_INSERT {\"id\": 4, \"ok\": false, \"error\": {\"code\": \"duplicate_key\", \"message\": \"duplicate primary key\"}}\nQ15_ROWS_AFTER_COMMIT {\"id\": 6, \"ok\": true, \"columns\": [\"id\"], \"rows\": [[1]]}",
+      "follow_up": "如果第二次失败导致整个事务自动回滚，第一次插入会怎样？",
       "student_result_explanation": ""
     }
   ],
@@ -280,7 +420,7 @@
         "pointer": "/experiments/6/output",
         "quote": "Q01_LIMIT3 {\"id\": 3, \"ok\": true, \"columns\": [\"id\", \"d\"], \"rows\": [[2, 1.0], [5, 1.0], [7, 1.0]]}"
       },
-      "reason": "学生先给出并列规则和全序理由，实际输出 LIMIT3 为 2、5、7，LIMIT4 为 2、5、7、10，结果与预测一致；尚未做结果后修正和复测，因此按 1 分档。",
+      "reason": "学生先给出并列规则和全序理由，实际输出 LIMIT3 为 2、5、7，LIMIT4 为 2、5、7、10，结果与预测一致；尚未做结果后修正和复测，因此按 1 分档。 A(1).md 已补充结果后解释，但没有修正和复测，仍按 1 分档。",
       "provenance": "A.md Q01 + Q.md Q01 结果"
     },
     {
@@ -295,7 +435,7 @@
         "pointer": "/experiments/7/output",
         "quote": "Q02_FILTERED_TOPK {\"id\": 3, \"ok\": true, \"columns\": [\"id\", \"d\"], \"rows\": [[3, 10.0], [4, 11.0]]}"
       },
-      "reason": "学生预测先过滤，实际正确结果为 target 的 3 和 4，全表 Top2 为 other 的 1 和 2；如果先全表取 TopK 再过滤会得到 0 条，结果与预测一致，按 1 分档。",
+      "reason": "学生预测先过滤，实际正确结果为 target 的 3 和 4，全表 Top2 为 other 的 1 和 2；如果先全表取 TopK 再过滤会得到 0 条，结果与预测一致，按 1 分档。 A(1).md 已补充结果后解释，但没有修正和复测，仍按 1 分档。",
       "provenance": "A.md Q02 + Q.md Q02 结果"
     },
     {
@@ -310,7 +450,7 @@
         "pointer": "/experiments/8/output",
         "quote": "Q03_AFTER_UNCOMMITTED_KILL {\"id\": 1, \"ok\": true, \"columns\": [\"id\"], \"rows\": [[1]]}"
       },
-      "reason": "学生预测已提交保留、未提交不保留；实际强杀后已提交的 1 在，未提交的 2 和 3 不在，撕裂块只保留 1，结果与预测一致，按 1 分档。",
+      "reason": "学生预测已提交保留、未提交不保留；实际强杀后已提交的 1 在，未提交的 2 和 3 不在，撕裂块只保留 1，结果与预测一致，按 1 分档。 A(1).md 已补充结果后解释，但没有修正和复测，仍按 1 分档。",
       "provenance": "A.md Q03 + Q.md Q03 结果"
     },
     {
@@ -325,7 +465,7 @@
         "pointer": "/experiments/9/output",
         "quote": "Q04_HALF_NEW_FILE_IGNORED {\"id\": 1, \"ok\": true, \"columns\": [\"id\"], \"rows\": [[1], [2]]}"
       },
-      "reason": "学生预测半写新文件不能选用；实际构造半写 rows_99.dat 后重启仍读取 rows_0.dat，文件 1 和 2 都在，半写文件被清理，结果与预测一致，按 1 分档。",
+      "reason": "学生预测半写新文件不能选用；实际构造半写 rows_99.dat 后重启仍读取 rows_0.dat，文件 1 和 2 都在，半写文件被清理，结果与预测一致，按 1 分档。 A(1).md 已补充结果后解释，但没有修正和复测，仍按 1 分档。",
       "provenance": "A.md Q04 + Q.md Q04 结果"
     },
     {
@@ -340,8 +480,158 @@
         "pointer": "/experiments/10/output",
         "quote": "Q05_LARGE_DISTANCE {\"id\": 3, \"ok\": true, \"columns\": [\"id\", \"d\"], \"rows\": [[1, 2.0000000400817547e+20]]}"
       },
-      "reason": "学生预测 float 累加会溢出或损失精度；实际 double 得到 2.0000000400817547e+20，float 平方和会溢出，1e39 输入被拒绝，结果与预测一致，按 1 分档。",
+      "reason": "学生预测 float 累加会溢出或损失精度；实际 double 得到 2.0000000400817547e+20，float 平方和会溢出，1e39 输入被拒绝，结果与预测一致，按 1 分档。 A(1).md 已补充结果后解释，但没有修正和复测，仍按 1 分档。",
       "provenance": "A.md Q05 + Q.md Q05 结果"
+    },
+    {
+      "id": "unit-q06-order",
+      "dimension": "技术理解与迁移",
+      "score": 1.0,
+      "student_evidence": {
+        "pointer": "/experiments/11/student_prediction/content",
+        "quote": "cat 相同的行之间按主键 id 升序排列。"
+      },
+      "result_evidence": {
+        "pointer": "/experiments/11/output",
+        "quote": "Q06_ORDER_TIES {\"id\": 3, \"ok\": true, \"columns\": [\"id\", \"cat\"], \"rows\": [[2, \"a\"], [3, \"a\"], [1, \"b\"], [4, \"b\"]]}"
+      },
+      "reason": "学生预测 cat 相同时按 id 升序，实际输出 2、3、1、4，LIMIT2 为 2、3，结果与预测一致，按 1 分档。",
+      "provenance": "A(1).md Q06 + Q.md Q06 结果"
+    },
+    {
+      "id": "unit-q07-varchar",
+      "dimension": "技术理解与迁移",
+      "score": 1.0,
+      "student_evidence": {
+        "pointer": "/experiments/12/student_prediction/content",
+        "quote": "“中文”“abc”和“😀😀😀”都可以插入 VARCHAR(3)"
+      },
+      "result_evidence": {
+        "pointer": "/experiments/12/output",
+        "quote": "Q07_ROWS {\"id\": 6, \"ok\": true, \"columns\": [\"id\", \"v\"], \"rows\": [[1, \"中文\"], [2, \"abc\"], [3, \"😀😀😀\"]]}"
+      },
+      "reason": "学生预测前三个成功、abcd 失败，实际结果完全一致，按 1 分档。",
+      "provenance": "A(1).md Q07 + Q.md Q07 结果"
+    },
+    {
+      "id": "unit-q08-unicode",
+      "dimension": "技术理解与迁移",
+      "score": 1.0,
+      "student_evidence": {
+        "pointer": "/experiments/13/student_prediction/content",
+        "quote": "升序结果应为 `ab、乙、甲`。"
+      },
+      "result_evidence": {
+        "pointer": "/experiments/13/output",
+        "quote": "Q08_UNICODE_ORDER {\"id\": 3, \"ok\": true, \"columns\": [\"id\", \"name\"], \"rows\": [[3, \"ab\"], [2, \"乙\"], [1, \"甲\"]]}"
+      },
+      "reason": "学生预测顺序为 ab、乙、甲，实际输出一致，按 1 分档。",
+      "provenance": "A(1).md Q08 + Q.md Q08 结果"
+    },
+    {
+      "id": "unit-q09-bigint",
+      "dimension": "技术理解与迁移",
+      "score": 1.0,
+      "student_evidence": {
+        "pointer": "/experiments/14/student_prediction/content",
+        "quote": "JSON 输出应把两个 id 都写成十进制整数字面量"
+      },
+      "result_evidence": {
+        "pointer": "/experiments/14/output",
+        "quote": "Q09_BIGINT_PRECISION {\"id\": 3, \"ok\": true, \"columns\": [\"id\"], \"rows\": [[9007199254740992], [9007199254740993]]}"
+      },
+      "reason": "学生预测两个 BIGINT 精确保留，实际输出两个十进制整数一致，按 1 分档。",
+      "provenance": "A(1).md Q09 + Q.md Q09 结果"
+    },
+    {
+      "id": "unit-q10-limit",
+      "dimension": "技术理解与迁移",
+      "score": 1.0,
+      "student_evidence": {
+        "pointer": "/experiments/15/student_prediction/content",
+        "quote": "没有 ORDER BY 时，不应把“具体返回哪三行”作为可依赖的 SQL 排序语义"
+      },
+      "result_evidence": {
+        "pointer": "/experiments/15/output",
+        "quote": "Q10_LIMIT_NO_ORDER {\"id\": 3, \"ok\": true, \"columns\": [\"id\"], \"rows\": [[10], [20], [30]]}"
+      },
+      "reason": "学生预测结果数量为三但具体行无排序保证，实际返回三行，按 1 分档。",
+      "provenance": "A(1).md Q10 + Q.md Q10 结果"
+    },
+    {
+      "id": "unit-q11-insert",
+      "dimension": "独立验证与质疑",
+      "score": 1.0,
+      "student_evidence": {
+        "pointer": "/experiments/16/student_prediction/content",
+        "quote": "前三个已检查通过的行也不会写入"
+      },
+      "result_evidence": {
+        "pointer": "/experiments/16/output",
+        "quote": "Q11_ROWS_AFTER_FAILURE {\"id\": 3, \"ok\": true, \"columns\": [\"id\"], \"rows\": []}"
+      },
+      "reason": "学生预测多行 INSERT 整条失败、前 3 行不写入，实际表为空，行为与预测一致；预测的错误码名称与实现的 duplicate_key 有差异，尚未修正复测，按 1 分档。",
+      "provenance": "A(1).md Q11 + Q.md Q11 结果"
+    },
+    {
+      "id": "unit-q12-unsupported",
+      "dimension": "独立验证与质疑",
+      "score": 1.0,
+      "student_evidence": {
+        "pointer": "/experiments/17/student_prediction/content",
+        "quote": "JOIN 和 ALTER TABLE 都应返回 `unsupported_statement`。如果错误发生在 BEGIN 之后，事务本身不应被自动提交或回滚"
+      },
+      "result_evidence": {
+        "pointer": "/experiments/17/output",
+        "quote": "Q12_ROWS_IN_TXN {\"id\": 6, \"ok\": true, \"columns\": [\"id\"], \"rows\": [[1]]}"
+      },
+      "reason": "学生预测语句失败不影响事务，实际 id 1 在事务内和 COMMIT 后都保留；实际错误码为 unsupported_sql，与预测名称有差异，按 1 分档。",
+      "provenance": "A(1).md Q12 + Q.md Q12 结果"
+    },
+    {
+      "id": "unit-q13-own-write",
+      "dimension": "技术理解与迁移",
+      "score": 1.0,
+      "student_evidence": {
+        "pointer": "/experiments/18/student_prediction/content",
+        "quote": "事务内 SELECT 应看到 UPDATE 后的新值，ROLLBACK 后的 SELECT 应重新看到更新前的旧值。"
+      },
+      "result_evidence": {
+        "pointer": "/experiments/18/output",
+        "quote": "Q13_READ_OWN_WRITE {\"id\": 5, \"ok\": true, \"columns\": [\"value\"], \"rows\": [[20]]}"
+      },
+      "reason": "学生预测事务内读新值、回滚后读旧值，实际 20 和 10，完全一致，按 1 分档。",
+      "provenance": "A(1).md Q13 + Q.md Q13 结果"
+    },
+    {
+      "id": "unit-q14-rollback-vector",
+      "dimension": "技术理解与迁移",
+      "score": 1.0,
+      "student_evidence": {
+        "pointer": "/experiments/19/student_prediction/content",
+        "quote": "如果 UPDATE 改变了该行到查询点的距离，事务内应显示基于新向量计算的距离，ROLLBACK 后应显示基于旧向量计算的距离。"
+      },
+      "result_evidence": {
+        "pointer": "/experiments/19/output",
+        "quote": "Q14_TXN_VECTOR {\"id\": 5, \"ok\": true, \"columns\": [\"d\"], \"rows\": [[10.0]]}"
+      },
+      "reason": "学生预测事务内新距离、回滚后旧距离，实际 10.0 和 0.0，完全一致，按 1 分档。",
+      "provenance": "A(1).md Q14 + Q.md Q14 结果"
+    },
+    {
+      "id": "unit-q15-failed-insert",
+      "dimension": "独立验证与质疑",
+      "score": 1.0,
+      "student_evidence": {
+        "pointer": "/experiments/20/student_prediction/content",
+        "quote": "最后 COMMIT 后表里只有一行 id 1。第二次 INSERT 返回 `duplicate_primary_key`，但第一次成功插入仍保留在事务中"
+      },
+      "result_evidence": {
+        "pointer": "/experiments/20/output",
+        "quote": "Q15_ROWS_AFTER_COMMIT {\"id\": 6, \"ok\": true, \"columns\": [\"id\"], \"rows\": [[1]]}"
+      },
+      "reason": "学生预测失败语句不回滚整个事务，实际 COMMIT 后只有 id 1，行为一致；错误码名称与实现有差异，按 1 分档。",
+      "provenance": "A(1).md Q15 + Q.md Q15 结果"
     }
   ],
   "retrospective": {
@@ -356,11 +646,11 @@
     "材料限制：学生提供了初始任务、仓库/令牌约束、卡死观察、继续指令，并在提交前确认了第一人称复盘；但学生没有独立设计实验或亲自复测，复盘中的技术细节来自 Agent 的实现和测试记录，本文件不把 Agent 的代码和解释直接计为学生理解。",
     "实现限制：不支持 NULL、JOIN、聚合、子查询、OR、ALTER、DROP、外键、主键更新和嵌套事务；大事务的 overlay 仍在内存中构建。",
     "验证限制：性能数字来自开发机 WSL2，不是评测机；没有实现真正的 IVF/HNSW，ann 模式返回精确结果。",
-    "第一批 Q01 到 Q05 的学生预测来自 A.md，实际输出由 Agent 运行；结果后解释仍在等待学生补充，因此这五个实例目前按 1 分档记录，尚未升级到 1.5 分档。"
+    "Q01 到 Q05 已有学生预测和结果后解释，Q06 到 Q15 已有学生预测和 Agent 实际输出；Q06 到 Q15 的结果后解释尚未补充，因此这些实例目前都按 1 分档记录。"
   ],
   "lab_protocol": {
     "questions_file": "Q.md",
     "answers_file": "A.md",
-    "note": "学生在A.md先写预测，Agent再运行实验并把实际输出写回Q.md；第一批Q01到Q05的结果后解释等待学生补充。"
+    "note": "学生在A.md写预测，Agent运行实验并把实际输出写回Q.md；Q01到Q05已有结果后解释，Q06到Q15的预测来自A(1).md，结果后解释仍等待补充。"
   }
 }

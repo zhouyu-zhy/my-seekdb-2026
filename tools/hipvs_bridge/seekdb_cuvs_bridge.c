@@ -177,6 +177,33 @@ done:
   return rc;
 }
 
+/* Check the final CAGRA traversal against full-probe neighbors on a second
+ * sample. A sparse local graph can still have good multi-hop recall. */
+static int sk_validate_cagra(sk_cuvs_index *h, const float *queries, const long long *truth, long stride)
+{
+  const long topk = 100;
+  const long sampled = SK_SAMPLE / 4;
+  unsigned results[100];
+  long hits10 = 0, hits100 = 0;
+  for (long row = 0; row < SK_SAMPLE; row += 4) {
+    const long long *expected = truth + row * stride;
+    /* Use the same single-query kernel selection as regular SQL searches. */
+    if (seekdb_cuvs_search(h, queries + row * h->dim, 1, topk, results, NULL) != 0) return 0;
+    for (long k = 0; k < topk; ++k) {
+      if (expected[k] < 0 || expected[k] >= h->n) continue;
+      for (long j = 0; j < topk; ++j) {
+        if (results[j] == (unsigned)expected[k]) {
+          ++hits100;
+          if (k < 10 && j < 10) ++hits10;
+          break;
+        }
+      }
+    }
+  }
+  return hits10 * 1000 >= sampled * 10 * 995 &&
+         hits100 * 1000 >= sampled * topk * 995;
+}
+
 /* --------------------------------------------------------------------------
  * Fast path.
  *
@@ -190,7 +217,8 @@ done:
  * used: SK_SAMPLE rows are queried against the full dataset. The candidate
  * graph must cover enough of those exact neighbors at one of the allowed
  * probe widths. Staged builds check up to 100 neighbors after excluding the
- * query itself. If the quality check fails, the caller uses NN-descent.
+ * query itself. Borderline wide graphs also require a successful search
+ * check; graphs rejected by the quality checks fall back to NN-descent.
  * ------------------------------------------------------------------------ */
 static int sk_build_ivf_graph(sk_cuvs_index *h, const float *base, long n, long dim)
 {
@@ -214,7 +242,7 @@ static int sk_build_ivf_graph(sk_cuvs_index *h, const float *base, long n, long 
   long long *hex_h = 0, *hap_h = 0;
   long long *hex_d = 0, *hap_d = 0;
   float *hed_d = 0, *had_d = 0;
-  int idx_ready = 0;
+  int idx_ready = 0, validate_search = 0;
   const int use_f16 = (dim > SK_F16_DIM);
   const int staged = dim > SK_IVF_DIRECT_MAX_DIM;
   const long exact_k = staged ? 101 : SK_EXACT_K;  /* one entry can be the query itself */
@@ -310,6 +338,7 @@ static int sk_build_ivf_graph(sk_cuvs_index *h, const float *base, long n, long 
       probes[2] = (uint32_t)(fip->n_lists / 4);
       const int attempts = staged ? 3 : 2;
       const double minimum = staged ? SK_QCHECK_WIDE_MIN : SK_QCHECK_MIN;
+      double coverage = 0;
       for (attempt = 0; attempt < attempts && accepted_probes == 0; ++attempt) {
         long hit = 0, tot = 0;
         fsp->n_probes = probes[attempt];
@@ -327,15 +356,34 @@ static int sk_build_ivf_graph(sk_cuvs_index *h, const float *base, long n, long 
             }
           }
         }
-        if (tot > 0 && (double)hit / (double)tot >= minimum) {
-          accepted_probes = (int)probes[attempt];
-        }
+        coverage = tot > 0 ? (double)hit / (double)tot : 0;
+        if (coverage >= minimum) accepted_probes = (int)probes[attempt];
       }
-      if (accepted_probes == 0) goto done;   /* too weak -> NN-descent */
+      if (accepted_probes == 0) {
+        if (!staged || coverage < 0.75) goto done;
+        /* Use nearby off-dataset queries for the second sample. Full-probe
+         * IVF supplies the exact reference before its buffers are released. */
+        validate_search = 1;
+        for (s = 0; s < SK_SAMPLE; ++s) {
+          const long row = (s * step + step / 2) % n;
+          const long other = (row + n / 2) % n;
+          const float *a = base + (size_t)row * dim;
+          const float *b = base + (size_t)other * dim;
+          float *query = hq + (size_t)s * dim;
+          for (long col = 0; col < dim; ++col) query[col] = 0.99f * a[col] + 0.01f * b[col];
+        }
+        if (cudaMemcpy(dqs, hq, sizeof(float) * (size_t)SK_SAMPLE * dim,
+                       cudaMemcpyDefault) != cudaSuccess) goto done;
+        fsp->n_probes = fip->n_lists;
+        if (cuvsIvfFlatSearch(h->res, fsp, fidx, &qt, &nt, &dt, nf) != CUVS_SUCCESS ||
+            cudaMemcpy(hex_h, hex_d, sizeof(*hex_h) * (size_t)SK_SAMPLE * exact_k,
+                       cudaMemcpyDefault) != cudaSuccess) goto done;
+        accepted_probes = (int)probes[attempts - 1];
+      }
       fsp->n_probes = (uint32_t)accepted_probes;
     }
     /* release the probe buffers */
-    free(hex_h); hex_h = 0;
+    if (!validate_search) { free(hex_h); hex_h = 0; }
     free(hap_h); hap_h = 0;
     cuvsRMMFree(h->res, hex_d, sizeof(long long) * (size_t)SK_SAMPLE * exact_k); hex_d = 0;
     cuvsRMMFree(h->res, hed_d, sizeof(float) * (size_t)SK_SAMPLE * exact_k); hed_d = 0;
@@ -345,7 +393,7 @@ static int sk_build_ivf_graph(sk_cuvs_index *h, const float *base, long n, long 
     if (dqs16 != 0) {
       cuvsRMMFree(h->res, dqs16, 2 * (size_t)SK_SAMPLE * dim); dqs16 = 0;
     }
-    free(hq); hq = 0;
+    if (!validate_search) { free(hq); hq = 0; }
   }
 
   /* ---- full self-kNN, chunked, written straight into the device graph ---- */
@@ -439,6 +487,11 @@ static int sk_build_ivf_graph(sk_cuvs_index *h, const float *base, long n, long 
     idx_ready = 1;
     if (cuvsCagraIndexFromArgs(h->res, h->ip->metric, &gt, &dt2, h->idx) != CUVS_SUCCESS) goto done;
   }
+  if (validate_search) {
+    h->n = n;
+    h->dim = dim;
+    if (!sk_validate_cagra(h, hq, hex_h, exact_k)) goto done;
+  }
   /* Hand the construction buffers over to the handle: the index keeps using
    * them, so they are released in seekdb_cuvs_free(). */
   h->graph_buf = dgraph; dgraph = 0;
@@ -495,6 +548,8 @@ void* seekdb_cuvs_build(const float* base, long n, long dim)
     return h;
   }
 
+  if (h->search_params) cuvsCagraSearchParamsDestroy(h->search_params);
+  if (h->query_scratch) cuvsRMMFree(h->res, h->query_scratch, h->query_scratch_bytes);
   cuvsCagraIndexParamsDestroy(h->ip);
 fail_res:
   cuvsResourcesDestroy(h->res);

@@ -26,10 +26,6 @@
 #include <unistd.h>
 #ifdef __linux__
 #include <sys/mman.h>
-#include <sys/syscall.h>
-#ifndef MFD_CLOEXEC
-#define MFD_CLOEXEC 0x0001U
-#endif
 #endif
 #include <istream>
 #include <ostream>
@@ -416,20 +412,9 @@ static bool ob_cuvs_try_search(void *key, vsag::Allocator *alloc,
 static const char OB_CUVS_SNAPSHOT_MAGIC[8] = {'O', 'B', 'C', 'U', 'V', 'S', '0', '2'};
 static const char OB_CUVS_COMPACT_MAGIC[8] = {'O', 'B', 'C', 'U', 'V', 'S', '0', '4'};
 struct ObCuvsSnapshotFile {
-  FILE *file_ = nullptr;
+  FILE *file_ = ::tmpfile();
   char path_[64] = {};
   ObCuvsSnapshotFile() {
-#ifdef __linux__
-    // The snapshot is written once and immediately consumed; keeping it in an
-    // unlinked memfd avoids a 128-384 MiB disk round trip on hosts whose /tmp is
-    // not a tmpfs. Fall back to tmpfile when memfd is unavailable.
-    const int fd = static_cast<int>(::syscall(SYS_memfd_create, "seekdb-cuvs-snapshot", MFD_CLOEXEC));
-    if (fd >= 0) {
-      file_ = ::fdopen(fd, "w+b");
-      if (file_ == nullptr) { ::close(fd); }
-    }
-#endif
-    if (file_ == nullptr) { file_ = ::tmpfile(); }
     if (file_ != nullptr) {
       ::snprintf(path_, sizeof(path_), "/proc/self/fd/%d", ::fileno(file_));
     }

@@ -15,11 +15,11 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* Degree of the graph that is searched. Kept equal to the contest baseline so
- * the query path (and its cost) is unchanged. */
+/* Keep the graph degree and expand more candidates per search step so the
+ * NN-descent fallback can spend fewer iterations refining the graph. */
 #define SK_GRAPH_DEGREE 128
-/* Keep the fallback graph and search effort independent of the IVF pilot. */
-#define SK_NN_ITER 42
+#define SK_NN_ITER 35
+#define SK_SEARCH_WIDTH 10
 #define SK_IVF_MIN_N 4096
 /* Use bounded staging when the existing full-matrix upload would be large. */
 #define SK_IVF_DIRECT_MAX_DIM 160
@@ -732,7 +732,7 @@ int seekdb_cuvs_search(void* handle, const float* query, long nq, long topk,
       size_t required_itopk = (size_t)topk * 4;
       if (required_itopk < 512) required_itopk = 512;
       sp->itopk_size = h->default_itopk > required_itopk ? h->default_itopk : required_itopk;
-      sp->search_width = 7;
+      sp->search_width = SK_SEARCH_WIDTH;
     }
     cuvsFilter f; f.type=NO_FILTER; f.addr=(uintptr_t)0;
     if (cuvsCagraSearch(h->res, sp, h->idx, &qt, &nt, &dt, f) != CUVS_SUCCESS) { rc=15; goto done; }

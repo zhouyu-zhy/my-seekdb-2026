@@ -431,3 +431,74 @@ int seekdb_cuvs_cagra_knn(const float* base, long n, long dim,
   seekdb_cuvs_free(h);
   return rc;
 }
+
+/* ------------------------------------------------------------------------- */
+/* Snapshot helpers: expose the CAGRA graph as a plain (n x gd) uint32 array  */
+/* so the DDL snapshot can store the vectors once instead of twice.           */
+/* ------------------------------------------------------------------------- */
+long seekdb_cuvs_graph_bytes(void* handle)
+{
+  sk_cuvs_index* h = (sk_cuvs_index*)handle;
+  int64_t gd = 0;
+  if (!h || h->n <= 0) return -1;
+  if (cuvsCagraIndexGetGraphDegree(h->idx, &gd) != CUVS_SUCCESS || gd <= 0) return -1;
+  return (long)((size_t)h->n * (size_t)gd * sizeof(unsigned));
+}
+
+int seekdb_cuvs_graph_dump(void* handle, void* host, long off, long bytes)
+{
+  sk_cuvs_index* h = (sk_cuvs_index*)handle;
+  DLManagedTensor gt;
+  long total;
+  if (!h || host == 0 || off < 0 || bytes <= 0) return -1;
+  total = seekdb_cuvs_graph_bytes(handle);
+  if (total < 0 || off + bytes > total) return -1;
+  if (cuvsCagraIndexGetGraph(h->idx, &gt) != CUVS_SUCCESS || gt.dl_tensor.data == 0) return -1;
+  {
+    const char* src = (const char*)gt.dl_tensor.data + off;
+    if (gt.dl_tensor.device.device_type == kDLCUDA) {
+      if (cudaMemcpy(host, src, (size_t)bytes, cudaMemcpyDeviceToHost) != cudaSuccess) return -1;
+    } else {
+      memcpy(host, src, (size_t)bytes);
+    }
+  }
+  return 0;
+}
+
+void* seekdb_cuvs_from_graph(const float* vecs, long n, long dim,
+                             const unsigned* graph, long gd)
+{
+  sk_cuvs_index* h = (sk_cuvs_index*)calloc(1, sizeof(*h));
+  if (!h || vecs == 0 || graph == 0 || n <= 0 || dim <= 0 || gd <= 0) { free(h); return 0; }
+  if (cuvsResourcesCreate(&h->res) != CUVS_SUCCESS) { free(h); return 0; }
+  if (cuvsCagraIndexParamsCreate(&h->ip) != CUVS_SUCCESS) goto fail_res;
+  if (cuvsRMMAlloc(h->res, &h->graph_buf, sizeof(unsigned) * (size_t)n * gd) != CUVS_SUCCESS) goto fail_ip;
+  if (cuvsRMMAlloc(h->res, &h->data_buf, sizeof(float) * (size_t)n * dim) != CUVS_SUCCESS) goto fail_g;
+  if (cudaMemcpy(h->graph_buf, graph, sizeof(unsigned) * (size_t)n * gd, cudaMemcpyDefault) != cudaSuccess) goto fail_d;
+  if (cudaMemcpy(h->data_buf, vecs, sizeof(float) * (size_t)n * dim, cudaMemcpyDefault) != cudaSuccess) goto fail_d;
+  if (cuvsCagraIndexCreate(&h->idx) != CUVS_SUCCESS) { h->idx = 0; goto fail_d; }
+  {
+    DLManagedTensor gt, dt;
+    long gs[2], ds[2];
+    gs[0] = n; gs[1] = gd;
+    ds[0] = n; ds[1] = dim;
+    sk_mk_tensor(&gt, gs, h->graph_buf, n, gd, kDLUInt, 32, 1);
+    sk_mk_tensor(&dt, ds, h->data_buf, n, dim, kDLFloat, 32, 1);
+    if (cuvsCagraIndexFromArgs(h->res, h->ip->metric, &gt, &dt, h->idx) != CUVS_SUCCESS) {
+      cuvsCagraIndexDestroy(h->idx); h->idx = 0; goto fail_d;
+    }
+  }
+  h->n = n; h->dim = dim;
+  return h;
+fail_d:
+  cuvsRMMFree(h->res, h->data_buf, sizeof(float) * (size_t)n * dim);
+fail_g:
+  cuvsRMMFree(h->res, h->graph_buf, sizeof(unsigned) * (size_t)n * gd);
+fail_ip:
+  cuvsCagraIndexParamsDestroy(h->ip);
+fail_res:
+  cuvsResourcesDestroy(h->res);
+  free(h);
+  fprintf(stderr, "[seekdb_cuvs] from_graph failed: %s\n", cuvsGetLastErrorText());
+  return 0;
+}

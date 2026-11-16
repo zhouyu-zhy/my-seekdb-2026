@@ -25,6 +25,11 @@ int   seekdb_cuvs_search(void* handle, const float* query, long nq, long topk,
 void  seekdb_cuvs_free(void* handle);
 int seekdb_cuvs_serialize(void* handle, const char* filename);
 void* seekdb_cuvs_deserialize(const char* filename, long n, long dim);
+/* Snapshot helpers (graph as a plain n x gd uint32 array). */
+long seekdb_cuvs_graph_bytes(void* handle);
+int  seekdb_cuvs_graph_dump(void* handle, void* host, long off, long bytes);
+void* seekdb_cuvs_from_graph(const float* vecs, long n, long dim,
+                             const unsigned* graph, long gd);
 #ifdef __cplusplus
 }
 #endif

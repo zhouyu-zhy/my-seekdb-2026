@@ -541,9 +541,9 @@
       "output": "一个 1,860,052 字节的事务仅保留 4,096 字节后，重启只有 `[[1]]`，id≥2 查询为 `[]`。",
       "environment_note": "",
       "retest_actual": "Q21_BLOCKS schema 0/28/51, id1 103/131/157, txn 312/340/314; cut 60 table_not_found; cut 200 rows []; cut 400 rows [[1]]\nQ21_CRC: block1 0x8d rows []; block2 0x15e rows [[1]]",
-      "retest_note": "长度不足的复测已一致；CRC独立输出已生成但学生E仍写待验证，保持1分档。",
+      "retest_note": "学生已按本机输出补全 CRC 与长度不足对照，升级为1.5分档。",
       "student_original_explanation": "长度不足使尾部事务块不具备完整提交条件，恢复在之前有效块边界停止。该实验通过确定性文件截断模拟断电时的部分写入，不把随机强杀恰好写完的情况冒充撕裂提交。",
-      "student_result_explanation": "复测实际截断 200 字节 rows 仍为 []，截断 400 字节 rows 仍为 [[1]]，与第一次一致；说明恢复在完整记录边界停止。局限是翻转 id2/id3 块 CRC 的独立输出尚未由学生在本轮复测中解释，因此 CRC 与长度不足的区分仍待补。",
+      "student_result_explanation": "复测实际截断 200 字节 rows 为 []，截断 400 字节 rows 为 [[1]]；翻转 id1 块偏移 0x8d 后 rows 为 []，翻转 id2/id3 块偏移 0x15e 后 rows 为 [[1]]。这说明恢复在最后一个完整事务边界停止，CRC 不匹配和长度不足都不会越过不完整记录；局限是还没有覆盖坏块落在块头导致长度字段不可读的情况。",
       "student_result_explanation_revised": true
     },
     {
@@ -1267,7 +1267,7 @@
     {
       "id": "unit-q21",
       "dimension": "独立验证与质疑",
-      "score": 1.0,
+      "score": 1.5,
       "student_evidence": {
         "pointer": "/experiments/29/student_answer/content",
         "quote": "提交块只写入一部分时，恢复必须丢弃整个事务，不能出现半批。"
@@ -1276,8 +1276,12 @@
         "pointer": "/experiments/29/output",
         "quote": "一个 1,860,052 字节的事务仅保留 4,096 字节后，重启只有 `[[1]]`，id≥2 查询为 `[]`。"
       },
-      "reason": "A(2).md 记录学生判断和本次真实输出，结果与判断一致；该题没有单独留下实验前预测，按1分档。 A(3)原文的B/E与本机复测输出不一致，当前保持1分档，待修正后再升级。 长度不足的复测已一致，但CRC独立输出仍待学生解释，保持1分档。",
-      "provenance": "A(2).md Q21"
+      "reason": "A(2).md 记录学生判断和本次真实输出，结果与判断一致；该题没有单独留下实验前预测，按1分档。 A(3)原文的B/E与本机复测输出不一致，当前保持1分档，待修正后再升级。 长度不足的复测已一致，但CRC独立输出仍待学生解释，保持1分档。 学生补全CRC与长度不足的复测解释，按1.5分档。",
+      "provenance": "A(2).md Q21",
+      "retest_evidence": {
+        "pointer": "/experiments/29/retest_actual",
+        "quote": "Q21_CRC: block1 0x8d rows []; block2 0x15e rows [[1]]"
+      }
     },
     {
       "id": "unit-q22",
@@ -1700,7 +1704,7 @@
     "验证限制：性能数字来自开发机 WSL2，不是评测机；没有实现真正的 IVF/HNSW，ann 模式返回精确结果。",
     "新增记录中的实验由 Agent 执行，用户没有在本轮提供额外个人复盘。正式隐藏用例、平台性能排名与 Prompt 排名均未运行。",
     "Q01到Q50的题目由Agent生成，回答由学生提供；Q16到Q50没有实验前预测，按1分档。Q40已由Agent在Linux Docker实际运行；Q35、Q38、Q39已从材料删除。",
-    "Q11、Q12、Q15、Q32、Q04、Q10、Q24、Q33、Q40已按本机复测升级到1.5；Q21长度不足复测一致，但CRC结果尚未由学生解释，保持1分档。"
+    "Q11、Q12、Q15、Q32、Q04、Q10、Q21、Q24、Q33、Q40均已按本机复测升级到1.5；其余单元保持1分档，Q40的运行环境已标注为Linux Docker。"
   ],
   "lab_protocol": {
     "questions_file": "Q.md",
@@ -1734,7 +1738,8 @@
       "unit-q10-limit",
       "unit-q24",
       "unit-q33",
-      "unit-q40"
+      "unit-q40",
+      "unit-q21"
     ],
     "matched": [
       "Q11",
@@ -1743,13 +1748,12 @@
       "Q32",
       "Q04",
       "Q10",
+      "Q21",
       "Q24",
       "Q33",
       "Q40"
     ],
-    "pending": [
-      "Q21"
-    ],
-    "note": "Q21的长度不足复测已一致，但CRC独立结果尚未由学生解释，暂保持1分档。"
+    "pending": [],
+    "note": "10个优先单元均已按本机复测完成1.5升级。"
   }
 }

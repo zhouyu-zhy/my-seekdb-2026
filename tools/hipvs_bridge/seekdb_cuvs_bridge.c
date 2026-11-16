@@ -24,23 +24,54 @@
  * the index over the buffers we hand it). Above this dimension that copy is
  * large enough to push the VRAM peak past the baseline envelope, so wide
  * vectors stay on the NN-descent path. */
-#define SK_IVF_MAX_DIM 160
+#define SK_IVF_MAX_DIM 512
 /* Sampled quality gate for the fast path (see sk_build_ivf_graph). */
 #define SK_QCHECK_MIN 0.94
 #define SK_SAMPLE 256
 #define SK_EXACT_K 32
-#define SK_CHUNK 2048
+#define SK_CHUNK 1024
+/* Above this dimension the device copy of the dataset that the CAGRA index is
+ * built over is kept in FP16 (half of the FP32 footprint). The contest allows
+ * internal FP16 as long as the external FP32 semantics and the recall gates
+ * hold; queries are converted to FP16 for the search as well. */
+#define SK_F16_DIM 100000  /* disabled: IVF-Flat rejects FP16 here */
 
 typedef struct {
   cuvsResources_t        res;
   cuvsCagraIndexParams_t ip;
   cuvsCagraIndex_t       idx;
   long n, dim;
+  int  f16;                     /* dataset of this index is FP16 */
   /* device buffers the index was constructed from (kept alive until the index
    * is destroyed, because cuVS may reference them without copying) */
   void *graph_buf;
   void *data_buf;
 } sk_cuvs_index;
+
+/* float -> IEEE half, round to nearest even */
+static unsigned short sk_f2h(float f)
+{
+  unsigned int x;
+  unsigned int sign, man, h;
+  int exp;
+  memcpy(&x, &f, sizeof(x));
+  sign = (x >> 16) & 0x8000u;
+  exp = (int)((x >> 23) & 0xffu) - 127 + 15;
+  man = x & 0x7fffffu;
+  if (exp <= 0) {
+    unsigned int shift;
+    if (exp < -10) return (unsigned short)sign;
+    man |= 0x800000u;
+    shift = (unsigned int)(14 - exp);
+    h = man >> shift;
+    if ((man >> (shift - 1)) & 1u) ++h;
+    return (unsigned short)(sign | h);
+  }
+  if (exp >= 31) return (unsigned short)(sign | 0x7c00u);
+  h = sign | ((unsigned int)exp << 10) | (man >> 13);
+  if (man & 0x1000u) ++h;
+  return (unsigned short)h;
+}
 
 static void sk_mk_tensor(DLManagedTensor *t, long *shape, void *data,
                          long rows, long cols, int code, int bits, int device)
@@ -102,6 +133,10 @@ static int sk_build_ivf_graph(sk_cuvs_index *h, const float *base, long n, long 
   cuvsIvfFlatIndex_t fidx = 0;
   float *dx = 0, *dqs = 0;      /* device: dataset copy, sample queries   */
   float *dqc = 0, *ddc = 0;     /* device: chunk queries, chunk distances */
+  unsigned short *dxh = 0;      /* device: FP16 dataset copy (dim>SK_F16_DIM) */
+  unsigned short *dqs16 = 0;    /* device: FP16 sample queries            */
+  unsigned short *dqc16 = 0;    /* device: FP16 chunk queries             */
+  unsigned short *hch = 0;      /* host  : FP16 conversion scratch        */
   long long *dnc = 0;           /* device: chunk kNN ids                  */
   long long *hnc = 0;           /* host  : chunk kNN ids                  */
   unsigned *dgraph = 0;         /* device: final kNN graph                */
@@ -111,9 +146,20 @@ static int sk_build_ivf_graph(sk_cuvs_index *h, const float *base, long n, long 
   long long *hex_d = 0, *hap_d = 0;
   float *hed_d = 0, *had_d = 0;
   int idx_ready = 0;
+  const int use_f16 = (dim > SK_F16_DIM);
 
-  if (cuvsRMMAlloc(h->res, (void **)&dx, sizeof(float) * (size_t)n * dim) != CUVS_SUCCESS) goto done;
-  if (cudaMemcpy(dx, base, sizeof(float) * (size_t)n * dim, cudaMemcpyDefault) != cudaSuccess) goto done;
+  if (use_f16) {
+    size_t nv = (size_t)n * (size_t)dim;
+    hch = (unsigned short *)malloc(2 * nv);
+    if (hch == 0) goto done;
+    for (size_t i = 0; i < nv; ++i) hch[i] = sk_f2h(base[i]);
+    if (cuvsRMMAlloc(h->res, (void **)&dxh, 2 * nv) != CUVS_SUCCESS) goto done;
+    if (cudaMemcpy(dxh, hch, 2 * nv, cudaMemcpyDefault) != cudaSuccess) goto done;
+    free(hch); hch = 0;
+  } else {
+    if (cuvsRMMAlloc(h->res, (void **)&dx, sizeof(float) * (size_t)n * dim) != CUVS_SUCCESS) goto done;
+    if (cudaMemcpy(dx, base, sizeof(float) * (size_t)n * dim, cudaMemcpyDefault) != cudaSuccess) goto done;
+  }
 
   if (cuvsIvfFlatIndexParamsCreate(&fip) != CUVS_SUCCESS) goto done;
   fip->metric = h->ip->metric;
@@ -128,9 +174,14 @@ static int sk_build_ivf_graph(sk_cuvs_index *h, const float *base, long n, long 
   if (cuvsIvfFlatIndexCreate(&fidx) != CUVS_SUCCESS) goto done;
   {
     DLManagedTensor dset; long ds[2] = {n, dim};
-    sk_mk_tensor(&dset, ds, dx, n, dim, kDLFloat, 32, 1);
+    if (use_f16) sk_mk_tensor(&dset, ds, dxh, n, dim, kDLFloat, 16, 1);
+    else          sk_mk_tensor(&dset, ds, dx,  n, dim, kDLFloat, 32, 1);
     if (cuvsIvfFlatBuild(h->res, fip, &dset, fidx) != CUVS_SUCCESS) goto done;
   }
+  /* The IVF index holds its own copy of the data now; drop ours until the
+   * CAGRA index needs it, which keeps the VRAM high-water mark at the IVF
+   * phase instead of at the kNN phase. */
+  if (dx != 0) { cuvsRMMFree(h->res, dx, sizeof(float) * (size_t)n * dim); dx = 0; }
   if (cuvsIvfFlatSearchParamsCreate(&fsp) != CUVS_SUCCESS) goto done;
   {
     uint32_t probes[2];
@@ -146,8 +197,18 @@ static int sk_build_ivf_graph(sk_cuvs_index *h, const float *base, long n, long 
       long row = s * step < n ? s * step : n - 1;
       memcpy(hq + (size_t)s * dim, base + (size_t)row * dim, sizeof(float) * dim);
     }
-    if (cuvsRMMAlloc(h->res, (void **)&dqs, sizeof(float) * (size_t)SK_SAMPLE * dim) != CUVS_SUCCESS) goto done;
-    if (cudaMemcpy(dqs, hq, sizeof(float) * (size_t)SK_SAMPLE * dim, cudaMemcpyDefault) != cudaSuccess) goto done;
+    if (use_f16) {
+      size_t nv = (size_t)SK_SAMPLE * (size_t)dim;
+      hch = (unsigned short *)malloc(2 * nv);
+      if (hch == 0) goto done;
+      for (size_t i = 0; i < nv; ++i) hch[i] = sk_f2h(hq[i]);
+      if (cuvsRMMAlloc(h->res, (void **)&dqs16, 2 * nv) != CUVS_SUCCESS) goto done;
+      if (cudaMemcpy(dqs16, hch, 2 * nv, cudaMemcpyDefault) != cudaSuccess) goto done;
+      free(hch); hch = 0;
+    } else {
+      if (cuvsRMMAlloc(h->res, (void **)&dqs, sizeof(float) * (size_t)SK_SAMPLE * dim) != CUVS_SUCCESS) goto done;
+      if (cudaMemcpy(dqs, hq, sizeof(float) * (size_t)SK_SAMPLE * dim, cudaMemcpyDefault) != cudaSuccess) goto done;
+    }
     if (cuvsRMMAlloc(h->res, (void **)&hex_d, sizeof(long long) * (size_t)SK_SAMPLE * SK_EXACT_K) != CUVS_SUCCESS) goto done;
     if (cuvsRMMAlloc(h->res, (void **)&hed_d, sizeof(float) * (size_t)SK_SAMPLE * SK_EXACT_K) != CUVS_SUCCESS) goto done;
     if (cuvsRMMAlloc(h->res, (void **)&hap_d, sizeof(long long) * (size_t)SK_SAMPLE * gd) != CUVS_SUCCESS) goto done;
@@ -160,7 +221,8 @@ static int sk_build_ivf_graph(sk_cuvs_index *h, const float *base, long n, long 
       long as[2], bs[2], cs[2], es[2], fs[2];
       cuvsFilter nf;
       nf.type = NO_FILTER; nf.addr = (uintptr_t)0;
-      sk_mk_tensor(&qt, as, dqs, SK_SAMPLE, dim, kDLFloat, 32, 1);
+      if (use_f16) sk_mk_tensor(&qt, as, dqs16, SK_SAMPLE, dim, kDLFloat, 16, 1);
+      else          sk_mk_tensor(&qt, as, dqs, SK_SAMPLE, dim, kDLFloat, 32, 1);
       sk_mk_tensor(&nt, bs, hex_d, SK_SAMPLE, SK_EXACT_K, kDLInt, 64, 1);
       sk_mk_tensor(&dt, cs, hed_d, SK_SAMPLE, SK_EXACT_K, kDLFloat, 32, 1);
       sk_mk_tensor(&n2, es, hap_d, SK_SAMPLE, gd, kDLInt, 64, 1);
@@ -201,12 +263,21 @@ static int sk_build_ivf_graph(sk_cuvs_index *h, const float *base, long n, long 
     cuvsRMMFree(h->res, hap_d, sizeof(long long) * (size_t)SK_SAMPLE * gd); hap_d = 0;
     cuvsRMMFree(h->res, had_d, sizeof(float) * (size_t)SK_SAMPLE * gd); had_d = 0;
     cuvsRMMFree(h->res, dqs, sizeof(float) * (size_t)SK_SAMPLE * dim); dqs = 0;
+    if (dqs16 != 0) {
+      cuvsRMMFree(h->res, dqs16, 2 * (size_t)SK_SAMPLE * dim); dqs16 = 0;
+    }
     free(hq); hq = 0;
   }
 
   /* ---- full self-kNN, chunked, written straight into the device graph ---- */
   if (cuvsRMMAlloc(h->res, (void **)&dgraph, sizeof(unsigned) * (size_t)n * gd) != CUVS_SUCCESS) goto done;
-  if (cuvsRMMAlloc(h->res, (void **)&dqc, sizeof(float) * (size_t)SK_CHUNK * dim) != CUVS_SUCCESS) goto done;
+  if (use_f16) {
+    if (cuvsRMMAlloc(h->res, (void **)&dqc16, 2 * (size_t)SK_CHUNK * dim) != CUVS_SUCCESS) goto done;
+    hch = (unsigned short *)malloc(2 * (size_t)SK_CHUNK * dim);
+    if (hch == 0) goto done;
+  } else {
+    if (cuvsRMMAlloc(h->res, (void **)&dqc, sizeof(float) * (size_t)SK_CHUNK * dim) != CUVS_SUCCESS) goto done;
+  }
   if (cuvsRMMAlloc(h->res, (void **)&dnc, sizeof(long long) * (size_t)SK_CHUNK * K) != CUVS_SUCCESS) goto done;
   if (cuvsRMMAlloc(h->res, (void **)&ddc, sizeof(float) * (size_t)SK_CHUNK * K) != CUVS_SUCCESS) goto done;
   hnc = (long long *)malloc(sizeof(long long) * (size_t)SK_CHUNK * K);
@@ -221,9 +292,17 @@ static int sk_build_ivf_graph(sk_cuvs_index *h, const float *base, long n, long 
       long as[2], bs[2], cs[2];
       cuvsFilter nf;
       nf.type = NO_FILTER; nf.addr = (uintptr_t)0;
-      if (cudaMemcpy(dqc, base + (size_t)start * dim, sizeof(float) * (size_t)rows * dim,
-                     cudaMemcpyDefault) != cudaSuccess) goto done;
-      sk_mk_tensor(&qt, as, dqc, rows, dim, kDLFloat, 32, 1);
+      if (use_f16) {
+        const float *src = base + (size_t)start * dim;
+        size_t nv = (size_t)rows * (size_t)dim;
+        for (size_t i = 0; i < nv; ++i) hch[i] = sk_f2h(src[i]);
+        if (cudaMemcpy(dqc16, hch, 2 * nv, cudaMemcpyDefault) != cudaSuccess) goto done;
+        sk_mk_tensor(&qt, as, dqc16, rows, dim, kDLFloat, 16, 1);
+      } else {
+        if (cudaMemcpy(dqc, base + (size_t)start * dim, sizeof(float) * (size_t)rows * dim,
+                       cudaMemcpyDefault) != cudaSuccess) goto done;
+        sk_mk_tensor(&qt, as, dqc, rows, dim, kDLFloat, 32, 1);
+      }
       sk_mk_tensor(&nt, bs, dnc, rows, K, kDLInt, 64, 1);
       sk_mk_tensor(&dt, cs, ddc, rows, K, kDLFloat, 32, 1);
       if (cuvsIvfFlatSearch(h->res, fsp, fidx, &qt, &nt, &dt, nf) != CUVS_SUCCESS) goto done;
@@ -245,9 +324,11 @@ static int sk_build_ivf_graph(sk_cuvs_index *h, const float *base, long n, long 
   }
   free(hnc); hnc = 0;
   free(hgraph); hgraph = 0;
+  if (hch != 0) { free(hch); hch = 0; }
   cuvsRMMFree(h->res, ddc, sizeof(float) * (size_t)SK_CHUNK * K); ddc = 0;
   cuvsRMMFree(h->res, dnc, sizeof(long long) * (size_t)SK_CHUNK * K); dnc = 0;
   cuvsRMMFree(h->res, dqc, sizeof(float) * (size_t)SK_CHUNK * dim); dqc = 0;
+  if (dqc16 != 0) { cuvsRMMFree(h->res, dqc16, 2 * (size_t)SK_CHUNK * dim); dqc16 = 0; }
 
   /* Drop the IVF index (it holds its own dataset copy) before materialising the
    * CAGRA index so the VRAM peak stays close to the baseline one. */
@@ -258,8 +339,13 @@ static int sk_build_ivf_graph(sk_cuvs_index *h, const float *base, long n, long 
   {
     DLManagedTensor gt, dt2;
     long as[2], bs[2];
+    if (dx == 0) {
+      if (cuvsRMMAlloc(h->res, (void **)&dx, sizeof(float) * (size_t)n * dim) != CUVS_SUCCESS) goto done;
+      if (cudaMemcpy(dx, base, sizeof(float) * (size_t)n * dim, cudaMemcpyDefault) != cudaSuccess) goto done;
+    }
     sk_mk_tensor(&gt, as, dgraph, n, gd, kDLUInt, 32, 1);
-    sk_mk_tensor(&dt2, bs, dx, n, dim, kDLFloat, 32, 1);
+    if (use_f16) sk_mk_tensor(&dt2, bs, dxh, n, dim, kDLFloat, 16, 1);
+    else          sk_mk_tensor(&dt2, bs, dx,  n, dim, kDLFloat, 32, 1);
     if (cuvsCagraIndexCreate(&h->idx) != CUVS_SUCCESS) { h->idx = 0; goto done; }
     idx_ready = 1;
     if (cuvsCagraIndexFromArgs(h->res, h->ip->metric, &gt, &dt2, h->idx) != CUVS_SUCCESS) goto done;
@@ -267,7 +353,9 @@ static int sk_build_ivf_graph(sk_cuvs_index *h, const float *base, long n, long 
   /* Hand the construction buffers over to the handle: the index keeps using
    * them, so they are released in seekdb_cuvs_free(). */
   h->graph_buf = dgraph; dgraph = 0;
-  h->data_buf = dx; dx = 0;
+  h->f16 = use_f16;
+  if (use_f16) { h->data_buf = dxh; dxh = 0; }
+  else         { h->data_buf = dx;  dx = 0; }
   rc = 0;
 
 done:
@@ -290,6 +378,10 @@ done:
   if (ddc != 0) { cuvsRMMFree(h->res, ddc, sizeof(float) * (size_t)SK_CHUNK * K); }
   if (dgraph != 0) { cuvsRMMFree(h->res, dgraph, sizeof(unsigned) * (size_t)n * gd); }
   if (dx != 0) { cuvsRMMFree(h->res, dx, sizeof(float) * (size_t)n * dim); }
+  if (dxh != 0) { cuvsRMMFree(h->res, dxh, 2 * (size_t)n * dim); }
+  if (dqs16 != 0) { cuvsRMMFree(h->res, dqs16, 2 * (size_t)SK_SAMPLE * dim); }
+  if (dqc16 != 0) { cuvsRMMFree(h->res, dqc16, 2 * (size_t)SK_CHUNK * dim); }
+  if (hch != 0) { free(hch); }
   return rc;
 }
 
@@ -325,14 +417,27 @@ int seekdb_cuvs_search(void* handle, const float* query, long nq, long topk,
   if (!h) return 1;
   int rc = 0;
   float* qd = 0; unsigned* nd = 0; float* dd = 0; cuvsCagraSearchParams_t sp = 0;
-  if (cuvsRMMAlloc(h->res, (void**)&qd, sizeof(float)*nq*h->dim)  != CUVS_SUCCESS) { rc=10; goto done; }
+  unsigned short* qd16 = 0; unsigned short* qh16 = 0;
+  const size_t qb = h->f16 ? 2 : 4;
+  if (cuvsRMMAlloc(h->res, (void**)(h->f16 ? (void**)&qd16 : (void**)&qd), qb*(size_t)nq*h->dim) != CUVS_SUCCESS) { rc=10; goto done; }
   if (cuvsRMMAlloc(h->res, (void**)&nd, sizeof(unsigned)*nq*topk) != CUVS_SUCCESS) { rc=11; goto done; }
   if (cuvsRMMAlloc(h->res, (void**)&dd, sizeof(float)*nq*topk)    != CUVS_SUCCESS) { rc=12; goto done; }
-  if (cudaMemcpy(qd, query, sizeof(float)*nq*h->dim, cudaMemcpyDefault) != cudaSuccess) { rc=13; goto done; }
+  if (h->f16) {
+    size_t nv = (size_t)nq * (size_t)h->dim, i;
+    qh16 = (unsigned short*)malloc(2 * nv);
+    if (qh16 == 0) { rc=13; goto done; }
+    for (i = 0; i < nv; ++i) qh16[i] = sk_f2h(query[i]);
+    if (cudaMemcpy(qd16, qh16, 2 * nv, cudaMemcpyDefault) != cudaSuccess) { rc=13; goto done; }
+    free(qh16); qh16 = 0;
+  } else {
+    if (cudaMemcpy(qd, query, sizeof(float)*nq*h->dim, cudaMemcpyDefault) != cudaSuccess) { rc=13; goto done; }
+  }
   {
     DLManagedTensor qt, nt, dt; long qs[2]={nq,h->dim}, nsh[2]={nq,topk}, dsh[2]={nq,topk};
-    qt.dl_tensor.data=qd; qt.dl_tensor.device.device_type=kDLCUDA; qt.dl_tensor.device.device_id=0;
-    qt.dl_tensor.ndim=2; qt.dl_tensor.dtype.code=kDLFloat; qt.dl_tensor.dtype.bits=32; qt.dl_tensor.dtype.lanes=1;
+    qt.dl_tensor.data = h->f16 ? (void*)qd16 : (void*)qd;
+    qt.dl_tensor.device.device_type=kDLCUDA; qt.dl_tensor.device.device_id=0;
+    qt.dl_tensor.ndim=2; qt.dl_tensor.dtype.code=kDLFloat;
+    qt.dl_tensor.dtype.bits = h->f16 ? 16 : 32; qt.dl_tensor.dtype.lanes=1;
     qt.dl_tensor.shape=qs; qt.dl_tensor.strides=0; qt.dl_tensor.byte_offset=0;
     nt=qt; nt.dl_tensor.data=nd; nt.dl_tensor.dtype.code=kDLUInt; nt.dl_tensor.shape=nsh;
     dt=qt; dt.dl_tensor.data=dd; dt.dl_tensor.dtype.code=kDLFloat; dt.dl_tensor.shape=dsh;
@@ -350,9 +455,11 @@ int seekdb_cuvs_search(void* handle, const float* query, long nq, long topk,
   }
 done:
   if (sp) cuvsCagraSearchParamsDestroy(sp);
+  if (qh16) free(qh16);
   if (dd) cuvsRMMFree(h->res, dd, sizeof(float)*nq*topk);
   if (nd) cuvsRMMFree(h->res, nd, sizeof(unsigned)*nq*topk);
   if (qd) cuvsRMMFree(h->res, qd, sizeof(float)*nq*h->dim);
+  if (qd16) cuvsRMMFree(h->res, qd16, 2*(size_t)nq*h->dim);
   if (rc) fprintf(stderr, "[seekdb_cuvs] search rc=%d: %s\n", rc, cuvsGetLastErrorText());
   return rc;
 }
@@ -368,7 +475,8 @@ void seekdb_cuvs_free(void* handle)
     h->graph_buf = 0;
   }
   if (h->data_buf != 0) {
-    cuvsRMMFree(h->res, h->data_buf, sizeof(float) * (size_t)h->n * (size_t)h->dim);
+    cuvsRMMFree(h->res, h->data_buf,
+                (h->f16 ? 2 : 4) * (size_t)h->n * (size_t)h->dim);
     h->data_buf = 0;
   }
   cuvsResourcesDestroy(h->res);

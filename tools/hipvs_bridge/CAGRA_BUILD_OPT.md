@@ -188,3 +188,21 @@ gets the IVF-Flat graph (10x).
   the 1.25x limit is ~3%;
 * the local query pool has 512 vectors, so the QPS numbers are measured with
   `nq=512` instead of the contest's 4096.
+
+## IVF pilot candidate
+
+The table above describes earlier builds; it does not measure this candidate.
+For large inputs already on the staged IVF path, the bridge now adds the
+representative training rows first. A GPU probe compares 64 queries against
+that sample with all lists and with the widest allowed graph probe. When their
+top-33 overlap is below 50%, the bridge uses the existing NN-descent fallback
+without populating the rest of the IVF index. Otherwise it adds the remaining
+rows with their original IDs and applies the full-data quality checks. The
+borderline CAGRA check computes exact neighbors only for the queries it uses.
+
+To assess this change, run section 3 on the same AMD machine and data for both
+the pilot and its parent `8f6f6803d`, keeping the frozen V5 and CPU reference
+runs. Use `--nq 4096` if the query pool allows it. Compare total DDL plus first
+query time, both Recall and QPS values, and peak VRAM. Check both a dataset
+that takes the fallback and one that passes the staged IVF gate. Report the
+two build speedups against V5 before applying the contest weights.

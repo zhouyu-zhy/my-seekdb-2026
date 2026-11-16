@@ -18,16 +18,15 @@
 /* Degree of the graph that is searched. Kept equal to the contest baseline so
  * the query path (and its cost) is unchanged. */
 #define SK_GRAPH_DEGREE 128
-/* NN-descent fallback knobs: 128 intermediate degree x 42 iterations. The
- * hidden 250K set keeps the NN-descent fallback, so this is the scored build
- * path. The recall lost by eight fewer iterations is recovered on the query
- * side by widening the CAGRA search beam from 4 to 7. */
+/* Keep the fallback graph and search effort independent of the IVF pilot. */
 #define SK_NN_ITER 42
 #define SK_IVF_MIN_N 4096
 /* Use bounded staging when the existing full-matrix upload would be large. */
 #define SK_IVF_DIRECT_MAX_DIM 160
 #define SK_IVF_MAX_DIM 512
 #define SK_IVF_UPLOAD_ROWS 16384
+#define SK_IVF_PILOT_ROWS 64
+#define SK_IVF_PILOT_K 33
 #define SK_QCHECK_WIDE_MIN 0.99
 /* Sampled quality gate for the fast path (see sk_build_ivf_graph). */
 #define SK_QCHECK_MIN 0.94
@@ -117,6 +116,72 @@ static int sk_build_nn_descent(sk_cuvs_index *h, const float *base, long n, long
   return 0;
 }
 
+static uint32_t sk_wide_max_probes(uint32_t n_lists)
+{
+  return n_lists / 4;
+}
+
+/* A cheap rejection test on the same representative rows used for training.
+ * This can only select the NN-descent fallback; accepting an IVF graph still
+ * requires the regular full-data checks. Keep the rejection floor well below
+ * the full-data gate because nearest neighbors change with sample density. */
+static int sk_ivf_pilot_reject(cuvsResources_t res, cuvsIvfFlatIndex_t index,
+                               const float *sample, long rows, long dim, uint32_t n_lists)
+{
+  enum { count = SK_IVF_PILOT_ROWS * SK_IVF_PILOT_K };
+  int64_t exact[count], approx[count];
+  const size_t query_bytes = sizeof(float) * (size_t)SK_IVF_PILOT_ROWS * dim;
+  float *queries = (float *)malloc(query_bytes);
+  void *d_queries = NULL, *d_ids = NULL, *d_distances = NULL;
+  cuvsIvfFlatSearchParams_t params = NULL;
+  int reject = 0;
+  if (!queries || cuvsRMMAlloc(res, &d_queries, query_bytes) != CUVS_SUCCESS ||
+      cuvsRMMAlloc(res, &d_ids, sizeof(exact)) != CUVS_SUCCESS ||
+      cuvsRMMAlloc(res, &d_distances, count * sizeof(float)) != CUVS_SUCCESS ||
+      cuvsIvfFlatSearchParamsCreate(&params) != CUVS_SUCCESS) goto done;
+  for (long i = 0; i < SK_IVF_PILOT_ROWS; ++i) {
+    const long row = (2 * i + 1) * rows / (2 * SK_IVF_PILOT_ROWS);
+    memcpy(queries + (size_t)i * dim, sample + (size_t)row * dim, (size_t)dim * sizeof(float));
+  }
+  if (cudaMemcpy(d_queries, queries, query_bytes, cudaMemcpyDefault) != cudaSuccess) goto done;
+  DLManagedTensor qt, nt, dt;
+  long qs[2], ns[2], ds[2];
+  cuvsFilter filter = {.addr = 0, .type = NO_FILTER};
+  sk_mk_tensor(&qt, qs, d_queries, SK_IVF_PILOT_ROWS, dim, kDLFloat, 32, 1);
+  sk_mk_tensor(&nt, ns, d_ids, SK_IVF_PILOT_ROWS, SK_IVF_PILOT_K, kDLInt, 64, 1);
+  sk_mk_tensor(&dt, ds, d_distances, SK_IVF_PILOT_ROWS, SK_IVF_PILOT_K, kDLFloat, 32, 1);
+  params->n_probes = n_lists;
+  if (cuvsIvfFlatSearch(res, params, index, &qt, &nt, &dt, filter) != CUVS_SUCCESS ||
+      cuvsStreamSync(res) != CUVS_SUCCESS ||
+      cudaMemcpy(exact, d_ids, sizeof(exact), cudaMemcpyDefault) != cudaSuccess) goto done;
+  params->n_probes = sk_wide_max_probes(n_lists);
+  if (cuvsIvfFlatSearch(res, params, index, &qt, &nt, &dt, filter) != CUVS_SUCCESS ||
+      cuvsStreamSync(res) != CUVS_SUCCESS ||
+      cudaMemcpy(approx, d_ids, sizeof(approx), cudaMemcpyDefault) != cudaSuccess) goto done;
+  long hits = 0;
+  for (long i = 0; i < SK_IVF_PILOT_ROWS; ++i) {
+    /* Include self in both arrays; this biases against rejecting IVF. */
+    for (long k = 0; k < SK_IVF_PILOT_K; ++k) {
+      const int64_t expected = exact[i * SK_IVF_PILOT_K + k];
+      if (expected < 0 || expected == INT64_MAX) goto done;
+      for (long j = 0; j < SK_IVF_PILOT_K; ++j) {
+        if (expected == approx[i * SK_IVF_PILOT_K + j]) { ++hits; break; }
+      }
+    }
+  }
+  reject = hits * 2 < count;
+done:
+  if (params) {
+    cuvsStreamSync(res);
+    cuvsIvfFlatSearchParamsDestroy(params);
+  }
+  if (d_distances) cuvsRMMFree(res, d_distances, count * sizeof(float));
+  if (d_ids) cuvsRMMFree(res, d_ids, sizeof(exact));
+  if (d_queries) cuvsRMMFree(res, d_queries, query_bytes);
+  free(queries);
+  return reject;
+}
+
 /* Fit centroids on a representative sample, then append all vectors with
  * their original row IDs. Only one partition of the input lives on device
  * alongside the inverted index. The stage also holds the training sample. */
@@ -127,6 +192,7 @@ static int sk_build_staged_ivf(cuvsResources_t res, cuvsIvfFlatIndexParams_t par
   const size_t row_bytes = (size_t)dim * sizeof(float);
   const size_t vector_bytes = (size_t)capacity * row_bytes;
   const size_t id_bytes = (size_t)capacity * sizeof(int64_t);
+  const int use_pilot = n >= 4 * SK_IVF_UPLOAD_ROWS;
   float *sample = (float *)malloc(vector_bytes);
   int64_t *ids = (int64_t *)malloc(id_bytes);
   void *vectors_device = NULL;
@@ -141,9 +207,9 @@ static int sk_build_staged_ivf(cuvsResources_t res, cuvsIvfFlatIndexParams_t par
   for (long row = 0; row < capacity; ++row) {
     const size_t source = (size_t)row * (size_t)n / (size_t)capacity;
     memcpy(sample + (size_t)row * dim, base + source * dim, row_bytes);
+    ids[row] = (int64_t)source;
   }
   if (cudaMemcpy(vectors_device, sample, vector_bytes, cudaMemcpyDefault) != cudaSuccess) goto done;
-  free(sample); sample = NULL;
   sk_mk_tensor(&vectors, vector_shape, vectors_device, capacity, dim, kDLFloat, 32, 1);
   params->add_data_on_build = false;
   params->kmeans_trainset_fraction = 1.0;
@@ -157,10 +223,34 @@ static int sk_build_staged_ivf(cuvsResources_t res, cuvsIvfFlatIndexParams_t par
   indices.dl_tensor.dtype.bits = 64;
   indices.dl_tensor.dtype.lanes = 1;
   indices.dl_tensor.shape = &id_shape;
-  for (long begin = 0; begin < n; begin += capacity) {
-    const long rows = n - begin < capacity ? n - begin : capacity;
-    for (long row = 0; row < rows; ++row) ids[row] = begin + row;
-    if (cudaMemcpy(vectors_device, base + (size_t)begin * dim,
+  if (use_pilot) {
+    id_shape = capacity;
+    if (cudaMemcpy(ids_device, ids, id_bytes, cudaMemcpyDefault) != cudaSuccess ||
+        cuvsIvfFlatExtend(res, &vectors, &indices, index) != CUVS_SUCCESS ||
+        cuvsStreamSync(res) != CUVS_SUCCESS) goto done;
+    if (sk_ivf_pilot_reject(res, index, sample, capacity, dim, params->n_lists)) goto done;
+  }
+  /* The sample is already indexed when the pilot ran. Skip exactly those IDs
+   * and reuse the training buffer to pack the intervening contiguous ranges. */
+  for (long begin = 0, sampled = 0; begin < n;) {
+    const float *input = base + (size_t)begin * dim;
+    long rows = 0;
+    while (begin < n && rows < capacity) {
+      const long next_sample = use_pilot && sampled < capacity
+        ? (long)((size_t)sampled * (size_t)n / (size_t)capacity) : n;
+      if (begin == next_sample) { ++begin; ++sampled; continue; }
+      const long available = next_sample - begin;
+      const long run = available < capacity - rows ? available : capacity - rows;
+      if (use_pilot) {
+        memcpy(sample + (size_t)rows * dim, base + (size_t)begin * dim, (size_t)run * row_bytes);
+      }
+      for (long j = 0; j < run; ++j) ids[rows + j] = begin + j;
+      rows += run;
+      begin += run;
+    }
+    if (rows == 0) continue;
+    if (use_pilot) input = sample;
+    if (cudaMemcpy(vectors_device, input,
                    (size_t)rows * row_bytes, cudaMemcpyDefault) != cudaSuccess ||
         cudaMemcpy(ids_device, ids, (size_t)rows * sizeof(*ids),
                    cudaMemcpyDefault) != cudaSuccess) goto done;
@@ -187,7 +277,7 @@ static int sk_validate_cagra(sk_cuvs_index *h, const float *queries, const long 
   const long sampled = SK_SAMPLE / 4;
   unsigned results[100];
   long hits10 = 0, hits100 = 0;
-  for (long row = 0; row < SK_SAMPLE; row += 4) {
+  for (long row = 0; row < sampled; ++row) {
     const long long *expected = truth + row * stride;
     /* Use the same single-query kernel selection as regular SQL searches. */
     if (seekdb_cuvs_search(h, queries + row * h->dim, 1, topk, results, NULL) != 0) return 0;
@@ -337,7 +427,7 @@ static int sk_build_ivf_graph(sk_cuvs_index *h, const float *base, long n, long 
                      cudaMemcpyDefault) != cudaSuccess) goto done;
       probes[0] = (uint32_t)(fip->n_lists / 32 > 0 ? fip->n_lists / 32 : 1);
       probes[1] = (uint32_t)(fip->n_lists / 8 > 0 ? fip->n_lists / 8 : 1);
-      probes[2] = (uint32_t)(fip->n_lists / 4);
+      probes[2] = sk_wide_max_probes(fip->n_lists);
       const int attempts = staged ? 3 : 2;
       const double minimum = staged ? SK_QCHECK_WIDE_MIN : SK_QCHECK_MIN;
       double coverage = 0;
@@ -366,19 +456,21 @@ static int sk_build_ivf_graph(sk_cuvs_index *h, const float *base, long n, long 
         /* Use nearby off-dataset queries for the second sample. Full-probe
          * IVF supplies the exact reference before its buffers are released. */
         validate_search = 1;
-        for (s = 0; s < SK_SAMPLE; ++s) {
-          const long row = (s * step + step / 2) % n;
+        const long validation_rows = SK_SAMPLE / 4;
+        for (s = 0; s < validation_rows; ++s) {
+          const long row = (4 * s * step + step / 2) % n;
           const long other = (row + n / 2) % n;
           const float *a = base + (size_t)row * dim;
           const float *b = base + (size_t)other * dim;
           float *query = hq + (size_t)s * dim;
           for (long col = 0; col < dim; ++col) query[col] = 0.99f * a[col] + 0.01f * b[col];
         }
-        if (cudaMemcpy(dqs, hq, sizeof(float) * (size_t)SK_SAMPLE * dim,
+        if (cudaMemcpy(dqs, hq, sizeof(float) * (size_t)validation_rows * dim,
                        cudaMemcpyDefault) != cudaSuccess) goto done;
+        as[0] = bs[0] = cs[0] = validation_rows;
         fsp->n_probes = fip->n_lists;
         if (cuvsIvfFlatSearch(h->res, fsp, fidx, &qt, &nt, &dt, nf) != CUVS_SUCCESS ||
-            cudaMemcpy(hex_h, hex_d, sizeof(*hex_h) * (size_t)SK_SAMPLE * exact_k,
+            cudaMemcpy(hex_h, hex_d, sizeof(*hex_h) * (size_t)validation_rows * exact_k,
                        cudaMemcpyDefault) != cudaSuccess) goto done;
         accepted_probes = (int)probes[attempts - 1];
       }

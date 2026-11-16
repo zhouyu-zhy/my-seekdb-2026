@@ -198,6 +198,92 @@ struct ObCuvsJob {
   bool need_build; std::vector<unsigned> *off; std::vector<float> *dst;
   int rc_; bool built_;
 };
+// One large-stack worker retains the GPU runtime thread context between searches.
+// Submission is synchronous, so query buffers and index handles remain owned by
+// the caller until the job has completed.
+class CuvsQueryWorker final {
+public:
+  CuvsQueryWorker() = default;
+  ~CuvsQueryWorker() {
+    pthread_mutex_lock(&submit_mutex_);
+    if (started_) {
+      pthread_mutex_lock(&state_mutex_);
+      stopping_ = true;
+      pthread_cond_signal(&condition_);
+      pthread_mutex_unlock(&state_mutex_);
+      pthread_join(thread_, nullptr);
+    }
+    pthread_mutex_unlock(&submit_mutex_);
+    pthread_cond_destroy(&condition_);
+    pthread_mutex_destroy(&state_mutex_);
+    pthread_mutex_destroy(&submit_mutex_);
+  }
+
+  bool run(void *(*function)(void *), void *argument) {
+    pthread_mutex_lock(&submit_mutex_);
+    if (!started_) {
+      pthread_attr_t attributes;
+      int rc = pthread_attr_init(&attributes);
+      if (rc == 0) {
+        rc = pthread_attr_setstacksize(&attributes, 32UL * 1024 * 1024);
+        if (rc == 0) {
+          rc = pthread_create(&thread_, &attributes, loop, this);
+        }
+        pthread_attr_destroy(&attributes);
+      }
+      started_ = rc == 0;
+    }
+    if (started_) {
+      pthread_mutex_lock(&state_mutex_);
+      function_ = function;
+      argument_ = argument;
+      pthread_cond_broadcast(&condition_);
+      while (function_ != nullptr) {
+        pthread_cond_wait(&condition_, &state_mutex_);
+      }
+      pthread_mutex_unlock(&state_mutex_);
+    }
+    const bool completed = started_;
+    pthread_mutex_unlock(&submit_mutex_);
+    return completed;
+  }
+
+  CuvsQueryWorker(const CuvsQueryWorker &) = delete;
+  CuvsQueryWorker &operator=(const CuvsQueryWorker &) = delete;
+
+private:
+  static void *loop(void *argument) {
+    auto &worker = *static_cast<CuvsQueryWorker *>(argument);
+    pthread_mutex_lock(&worker.state_mutex_);
+    while (!worker.stopping_) {
+      while (worker.function_ == nullptr && !worker.stopping_) {
+        pthread_cond_wait(&worker.condition_, &worker.state_mutex_);
+      }
+      if (!worker.stopping_) {
+        auto function = worker.function_;
+        void *job = worker.argument_;
+        pthread_mutex_unlock(&worker.state_mutex_);
+        function(job);
+        pthread_mutex_lock(&worker.state_mutex_);
+        worker.function_ = nullptr;
+        worker.argument_ = nullptr;
+        pthread_cond_broadcast(&worker.condition_);
+      }
+    }
+    pthread_mutex_unlock(&worker.state_mutex_);
+    return nullptr;
+  }
+
+  pthread_mutex_t submit_mutex_ = PTHREAD_MUTEX_INITIALIZER;
+  pthread_mutex_t state_mutex_ = PTHREAD_MUTEX_INITIALIZER;
+  pthread_cond_t condition_ = PTHREAD_COND_INITIALIZER;
+  pthread_t thread_{};
+  bool started_ = false;
+  bool stopping_ = false;
+  void *(*function_)(void *) = nullptr;
+  void *argument_ = nullptr;
+};
+
 // Runs on a dedicated large-stack pthread: cuVS CAGRA build/search overflow the
 // small (~1.5MB) OB worker-thread stack.
 static void *ob_cuvs_job(void *arg) {
@@ -283,10 +369,8 @@ static bool ob_cuvs_try_search(void *key, vsag::Allocator *alloc,
   std::vector<unsigned> off(topk);
   std::vector<float> dst(topk);
   ObCuvsJob job{ent, query, topk, static_cast<int>(ent->dim_), n, need_build, &off, &dst, -1, false};
-  pthread_t tid; pthread_attr_t attr; pthread_attr_init(&attr);
-  pthread_attr_setstacksize(&attr, 32UL * 1024 * 1024);
-  if (pthread_create(&tid, &attr, ob_cuvs_job, &job) == 0) { pthread_join(tid, nullptr); }
-  pthread_attr_destroy(&attr);
+  static CuvsQueryWorker query_worker;
+  if (!query_worker.run(ob_cuvs_job, &job)) { return false; }
   if (job.built_) { ob_vsag_trace("cuvs_build", key, static_cast<long>(ent->dim_), static_cast<long>(n)); }
   if (ent->bridge_ == nullptr || job.rc_ != 0) { return false; }
   // Post-filter: cuVS returned UNFILTERED top-k. Apply the query's row filter

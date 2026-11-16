@@ -8,6 +8,9 @@
 #include <queue>
 #include <set>
 #include <unordered_set>
+#if defined(__AVX2__) && defined(__FMA__)
+#include <immintrin.h>
+#endif
 
 namespace mvdb {
 
@@ -111,6 +114,92 @@ double l2DistancePtr(const float* a, const float* b, size_t n) {
     }
     return std::sqrt(s);
 }
+
+// The float pass only rejects candidates that are provably above the current
+// threshold. Every remaining candidate follows the original double path,
+// including overflow, near ties, and dimensions beyond the error budget.
+bool outsideTopK(const float* a, const float* b, size_t n, double squaredCutoff) {
+#if defined(__AVX2__) && defined(__FMA__)
+    if (n < 32 || n > 4096) return false;
+    __m256 acc0 = _mm256_setzero_ps(), acc1 = acc0, acc2 = acc0, acc3 = acc0;
+    size_t i = 0;
+    for (; i + 32 <= n; i += 32) {
+        const __m256 d0 = _mm256_sub_ps(_mm256_loadu_ps(a + i), _mm256_loadu_ps(b + i));
+        const __m256 d1 = _mm256_sub_ps(_mm256_loadu_ps(a + i + 8), _mm256_loadu_ps(b + i + 8));
+        const __m256 d2 = _mm256_sub_ps(_mm256_loadu_ps(a + i + 16), _mm256_loadu_ps(b + i + 16));
+        const __m256 d3 = _mm256_sub_ps(_mm256_loadu_ps(a + i + 24), _mm256_loadu_ps(b + i + 24));
+        acc0 = _mm256_fmadd_ps(d0, d0, acc0);
+        acc1 = _mm256_fmadd_ps(d1, d1, acc1);
+        acc2 = _mm256_fmadd_ps(d2, d2, acc2);
+        acc3 = _mm256_fmadd_ps(d3, d3, acc3);
+    }
+    const __m256 acc = _mm256_add_ps(_mm256_add_ps(acc0, acc1), _mm256_add_ps(acc2, acc3));
+    const __m128 half = _mm_add_ps(_mm256_castps256_ps128(acc), _mm256_extractf128_ps(acc, 1));
+    const __m128 pairs = _mm_add_ps(half, _mm_movehl_ps(half, half));
+    float sum = _mm_cvtss_f32(_mm_add_ss(pairs, _mm_shuffle_ps(pairs, pairs, 1)));
+    for (; i < n; ++i) {
+        const float d = a[i] - b[i];
+        sum = d * d + sum;
+    }
+    // At most n rounded additions plus three operations per term. Use a
+    // wider envelope than that bound and allow for underflow in each term.
+    const double slack = (static_cast<double>(n) + 16) * 4 * FLT_EPSILON;
+    return std::isfinite(sum) &&
+           static_cast<double>(sum) > squaredCutoff * (1 + slack) + static_cast<double>(n) * 1e-36;
+#else
+    (void)a; (void)b; (void)n; (void)squaredCutoff;
+    return false;
+#endif
+}
+
+#if defined(__AVX2__) && defined(__FMA__)
+// Use a common power-of-two scale: rounding moves each coordinate by at
+// most half a unit, so the distance between two rounded vectors differs
+// from their original distance by at most sqrt(dim) units.
+void buildSketch(TableData& table, size_t column, size_t dim)
+{
+    table.sketchValid = true;
+    double largest = 0;
+    for (const Row& row : table.rows) {
+        for (float v : row[column].v) largest = std::max(largest, std::fabs(static_cast<double>(v)));
+    }
+    table.sketchScale = 0;
+    if (largest == 0) return;
+    int exponent = 0;
+    std::frexp(largest, &exponent);
+    double scale = std::ldexp(1.0, exponent - 7);
+    if (largest > 127 * scale) scale *= 2;
+    const double reciprocal = 1 / scale;
+    table.vectorSketch.resize(table.rows.size() * dim);
+    size_t index = 0;
+    for (const Row& row : table.rows) {
+        for (float v : row[column].v) {
+            table.vectorSketch[index++] = static_cast<int8_t>(std::nearbyint(v * reciprocal));
+        }
+    }
+    table.sketchScale = scale;
+}
+
+uint32_t sketchDistance(const int8_t* a, const int8_t* b, size_t n)
+{
+    __m256i acc = _mm256_setzero_si256();
+    size_t i = 0;
+    for (; i + 16 <= n; i += 16) {
+        const __m128i va = _mm_loadu_si128(reinterpret_cast<const __m128i*>(a + i));
+        const __m128i vb = _mm_loadu_si128(reinterpret_cast<const __m128i*>(b + i));
+        const __m256i d = _mm256_sub_epi16(_mm256_cvtepi8_epi16(va), _mm256_cvtepi8_epi16(vb));
+        acc = _mm256_add_epi32(acc, _mm256_madd_epi16(d, d));
+    }
+    const __m128i half = _mm_add_epi32(_mm256_castsi256_si128(acc), _mm256_extracti128_si256(acc, 1));
+    const __m128i pairs = _mm_add_epi32(half, _mm_srli_si128(half, 8));
+    uint32_t result = static_cast<uint32_t>(_mm_cvtsi128_si32(_mm_add_epi32(pairs, _mm_srli_si128(pairs, 4))));
+    for (; i < n; ++i) {
+        const int d = static_cast<int>(a[i]) - b[i];
+        result += static_cast<uint32_t>(d * d);
+    }
+    return result;
+}
+#endif
 
 double l2Distance(const std::vector<float>& a, const std::vector<float>& b) {
     return l2DistancePtr(a.data(), b.data(), a.size());
@@ -790,11 +879,55 @@ QueryResult Engine::execSelect(const SelectStmt& st, const std::string& searchMo
         return r;
     }
 
+    TableData* base = tableById(schema->id);
+    const bool noOverlay = txn_.tables.find(schema->id) == txn_.tables.end();
+    std::vector<int8_t> querySketch;
+    double sketchCutoff = 0;
+    auto refreshSketchCutoff = [&]() {
+        if (querySketch.empty() || heap.size() < k) return;
+        const double band = heap.top().dist / base->sketchScale;
+        const double upper = (band + std::sqrt(static_cast<double>(querySketch.size()))) * (1 + 1e-10);
+        sketchCutoff = upper * upper;
+    };
+#if defined(__AVX2__) && defined(__FMA__)
+    if (topk && base && base->cached && noOverlay && base->rows.size() >= 512) {
+        const size_t dim = order[0].vec.size();
+        if (dim >= 32 && dim <= 4096 && base->rows.size() <= base->vectorSketch.max_size() / dim) {
+            if (!base->sketchValid) buildSketch(*base, static_cast<size_t>(order[0].col), dim);
+            if (base->sketchScale > 0) {
+                querySketch.reserve(dim);
+                for (float value : order[0].vec) {
+                    const double scaled = static_cast<double>(value) / base->sketchScale;
+                    if (std::fabs(scaled) > 127) { querySketch.clear(); break; }
+                    querySketch.push_back(static_cast<int8_t>(std::nearbyint(scaled)));
+                }
+            }
+        }
+    }
+#endif
+
+    auto measure = [&](const float* data, const std::vector<float>& query, double& d) {
+        if (heap.size() >= k) {
+            const double worst = heap.top().dist;
+            if (outsideTopK(data, query.data(), query.size(), worst * worst)) return false;
+        }
+        d = l2DistancePtr(data, query.data(), query.size());
+        return true;
+    };
+
     auto process = [&](const Row& row) {
         if (hasWhere && !passPreds(preds, row)) return;
         int64_t pk = row[static_cast<size_t>(schema->pk)].i;
         if (topk) {
-            double d = l2Distance(row[static_cast<size_t>(order[0].col)].v, order[0].vec);
+#if defined(__AVX2__) && defined(__FMA__)
+            if (!querySketch.empty() && heap.size() >= k) {
+                const size_t pos = static_cast<size_t>(&row - base->rows.data());
+                if (sketchDistance(base->vectorSketch.data() + pos * querySketch.size(),
+                                   querySketch.data(), querySketch.size()) > sketchCutoff) return;
+            }
+#endif
+            double d;
+            if (!measure(row[static_cast<size_t>(order[0].col)].v.data(), order[0].vec, d)) return;
             if (heap.size() < k || (d < heap.top().dist || (d == heap.top().dist && pk < heap.top().pk))) {
                 Cand c;
                 c.pk = pk;
@@ -806,6 +939,7 @@ QueryResult Engine::execSelect(const SelectStmt& st, const std::string& searchMo
                 c.keys.push_back(std::move(sk));
                 if (heap.size() >= k && k > 0) heap.pop();
                 if (k > 0) heap.push(std::move(c));
+                refreshSketchCutoff();
             }
         } else {
             Cand c;
@@ -816,38 +950,39 @@ QueryResult Engine::execSelect(const SelectStmt& st, const std::string& searchMo
         }
     };
 
-    TableData* base = tableById(schema->id);
-    bool noOverlay = txn_.tables.find(schema->id) == txn_.tables.end();
     bool earlyLimit = st.hasLimit && order.empty() && limit > 0;
-    bool fastVec = topk && !hasWhere && base && base->cached && noOverlay &&
-                   base->schema.vec == order[0].col;
-    if (fastVec) {
-        buildVectorCache(*base);
-        const size_t vc = static_cast<size_t>(base->schema.vec);
-        const size_t dim = base->schema.cols[vc].length;
-        const float* q = order[0].vec.data();
-        const size_t n = dim ? base->vecCache.size() / dim : 0;
-        for (size_t j = 0; j < n; ++j) {
-            double d = l2DistancePtr(base->vecCache.data() + j * dim, q, dim);
-            const Row& row = base->rows[base->vecRows[j]];
-            int64_t pk = row[static_cast<size_t>(schema->pk)].i;
-            if (heap.size() < k || (d < heap.top().dist || (d == heap.top().dist && pk < heap.top().pk))) {
-                Cand c;
-                c.pk = pk;
-                c.dist = d;
-                c.vals = project(row);
-                SortKey sk;
-                sk.kind = 2;
-                sk.d = d;
-                c.keys.push_back(std::move(sk));
-                if (heap.size() >= k && k > 0) heap.pop();
-                if (k > 0) heap.push(std::move(c));
+    if (base && base->cached && noOverlay) {
+        const auto equality = std::find_if(preds.begin(), preds.end(), [](const Pred& p) {
+            return p.op == 0;
+        });
+        if (topk && equality != preds.end() &&
+            (base->filterCol < 0 || base->filterCol == equality->col)) {
+            const int col = equality->col;
+            const bool integer = equality->type == 0;
+            auto& positions = base->filterOrder;
+            if (base->filterCol < 0) {
+                positions.resize(base->rows.size());
+                for (size_t i = 0; i < positions.size(); ++i) positions[i] = static_cast<uint32_t>(i);
+                std::sort(positions.begin(), positions.end(), [&](uint32_t a, uint32_t b) {
+                    const Value& lhs = base->rows[a][col];
+                    const Value& rhs = base->rows[b][col];
+                    return integer ? lhs.i < rhs.i : lhs.s < rhs.s;
+                });
+                base->filterCol = col;
             }
-        }
-    } else if (base && base->cached && noOverlay) {
-        for (const Row& row : base->rows) {
-            process(row);
-            if (earlyLimit && static_cast<int64_t>(all.size()) >= limit) break;
+            auto first = std::lower_bound(positions.begin(), positions.end(), *equality,
+                [&](uint32_t row, const Pred& target) {
+                    const Value& key = base->rows[row][col];
+                    return integer ? key.i < target.i : key.s < target.s;
+                });
+            for (; first != positions.end() && evalPred(*equality, base->rows[*first]); ++first) {
+                process(base->rows[*first]);
+            }
+        } else {
+            for (const Row& row : base->rows) {
+                process(row);
+                if (earlyLimit && static_cast<int64_t>(all.size()) >= limit) break;
+            }
         }
     } else {
         scanRows(schema->id, [&](const Row& row) {
@@ -929,30 +1064,6 @@ bool readBlockAt(FILE* fp, uint64_t pos, uint64_t fileLimit, std::vector<uint8_t
 }
 
 }  // namespace
-
-void Engine::buildVectorCache(TableData& t) {
-    if (t.vecCacheValid) return;
-    t.vecCache.clear();
-    t.vecRows.clear();
-    if (!t.cached || t.schema.vec < 0) {
-        t.vecCacheValid = true;
-        return;
-    }
-    const size_t vc = static_cast<size_t>(t.schema.vec);
-    const size_t dim = t.schema.cols[vc].length;
-    if (dim == 0) {
-        t.vecCacheValid = true;
-        return;
-    }
-    t.vecCache.reserve(t.rows.size() * dim);
-    t.vecRows.reserve(t.rows.size());
-    for (size_t i = 0; i < t.rows.size(); ++i) {
-        const std::vector<float>& v = t.rows[i][vc].v;
-        t.vecCache.insert(t.vecCache.end(), v.begin(), v.end());
-        t.vecRows.push_back(static_cast<uint32_t>(i));
-    }
-    t.vecCacheValid = true;
-}
 
 void Engine::scanRows(uint32_t tableId, const std::function<bool(const Row&)>& fn) {
     TxnTable* overlay = nullptr;

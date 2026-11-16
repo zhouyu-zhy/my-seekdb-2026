@@ -1,6 +1,7 @@
 #include "mvdb.h"
 
 #include <cctype>
+#include <charconv>
 #include <cerrno>
 #include <cmath>
 #include <cstdlib>
@@ -19,14 +20,6 @@ std::string upperAscii(const std::string& s) {
     std::string out = s;
     for (char& c : out) {
         if (c >= 'a' && c <= 'z') c = static_cast<char>(c - 'a' + 'A');
-    }
-    return out;
-}
-
-std::string lowerAscii(const std::string& s) {
-    std::string out = s;
-    for (char& c : out) {
-        if (c >= 'A' && c <= 'Z') c = static_cast<char>(c - 'A' + 'a');
     }
     return out;
 }
@@ -99,14 +92,18 @@ private:
             ++i_;
             std::string value;
             while (i_ < s_.size()) {
-                char ch = s_[i_++];
+                const size_t begin = i_;
+                while (i_ < s_.size() && s_[i_] != quote && s_[i_] != '\\') ++i_;
+                value.append(s_, begin, i_ - begin);
+                if (i_ == s_.size()) break;
+                const char ch = s_[i_++];
                 if (ch == quote) {
                     if (i_ < s_.size() && s_[i_] == quote) {  // doubled quote
                         value.push_back(quote);
                         ++i_;
                         continue;
                     }
-                    return Token{Token::STRING, value, start};
+                    return Token{Token::STRING, std::move(value), start};
                 }
                 if (ch == '\\' && i_ < s_.size()) {
                     char e = s_[i_++];
@@ -756,21 +753,26 @@ std::vector<double> parseVectorText(const std::string& text) {
     for (;;) {
         skipws();
         if (i >= text.size()) fail("invalid_vector", "unterminated vector literal");
-        const char* begin = text.c_str() + i;
-        char* end = nullptr;
-        errno = 0;
-        double d = std::strtod(begin, &end);
-        if (end == begin || errno == ERANGE || !std::isfinite(d)) {
-            fail("invalid_vector", "invalid vector component");
+        const char* begin = text.data() + i;
+        double d = 0;
+        const auto parsed = std::from_chars(begin, text.data() + text.size(), d);
+        const char* end = parsed.ptr;
+        // Keep the original conversion semantics for plus signs, hexadecimal
+        // literals and range boundaries.
+        if (parsed.ec != std::errc{} ||
+            (end < text.data() + text.size() && (*end == 'x' || *end == 'X')) ||
+            (d != 0 && std::fabs(d) < std::numeric_limits<double>::min())) {
+            char* fallbackEnd = nullptr;
+            errno = 0;
+            d = std::strtod(begin, &fallbackEnd);
+            if (fallbackEnd == begin || errno == ERANGE) {
+                fail("invalid_vector", "invalid vector component");
+            }
+            end = fallbackEnd;
         }
-        // strtod accepts "nan" and "inf"; reject them explicitly.
-        std::string raw(begin, static_cast<size_t>(end - begin));
-        std::string low = lowerAscii(raw);
-        if (low.find("nan") != std::string::npos || low.find("inf") != std::string::npos) {
-            fail("invalid_vector", "vector component must be finite");
-        }
+        if (!std::isfinite(d)) fail("invalid_vector", "vector component must be finite");
         out.push_back(d);
-        i = static_cast<size_t>(end - text.c_str());
+        i = static_cast<size_t>(end - text.data());
         skipws();
         if (i < text.size() && text[i] == ',') {
             ++i;

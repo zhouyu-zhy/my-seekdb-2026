@@ -7,7 +7,12 @@
     "session_date": "2026-11-16",
     "repository": "https://github.com/zhouyu-zhy/my-seekdb-2026",
     "branch": "2026-competition-round2",
-    "note": "本文件记录同一次开发会话。user_prompts 中的用户消息为原文节选，GitHub token 已脱敏；role=agent 的条目和 experiments 中的命令/输出来自同一次会话的 Agent 执行与工具结果，未虚构学生发言、实验结果或学生理解。retrospective 由助手根据真实过程整理，学生于2026-11-16明确确认后作为本人复盘提交；Q01到Q05的学生预测来自学生自己的A.md，实际输出由Agent运行后写回Q.md。"
+    "note": "本文件记录同一次开发会话。user_prompts 中的用户消息为原文节选，GitHub token 已脱敏；role=agent 的条目和 experiments 中的命令/输出来自同一次会话的 Agent 执行与工具结果，未虚构学生发言、实验结果或学生理解。retrospective 由助手根据真实过程整理，学生于2026-11-16明确确认后作为本人复盘提交；Q01到Q05的学生预测来自学生自己的A.md，实际输出由Agent运行后写回Q.md。",
+    "additional_session": {
+      "session_date": "2026-11-16",
+      "base_commit": "bbbd63957d42d2ebf7ec7ddfad9283141a50b007",
+      "note": "保留原有材料与其确认范围。以下新增 Prompt 为当前用户原话。实验由 Agent 执行，分析与改动由 Agent 编写，本轮用户没有补充本人复盘。"
+    }
   },
   "user_prompts": [
     {
@@ -36,6 +41,30 @@
       "role": "student",
       "verbatim": true,
       "content": "我确认了，你提交吧。另外，所有题干里面要求的关于prompt这道题的东西你都做到了吗？因为这个是很难拿到满分的，是比谁的分数更高，我们需要尽量优化到最好。但是优化现在先不用做，我先提交一遍试一试当前的分数。"
+    },
+    {
+      "id": "r2-u1",
+      "role": "student",
+      "verbatim": true,
+      "content": "现在我要做加赛题，而加赛题有两个小题，这两个小题要一起提交，详情要求见题目，而且每天只能提交两次，所以请你完成题目以后仔细检查，确保无误并且能让我获取尽可能高的分数（越高越好），一切完成后告诉我branch和commit id方便我提交评测"
+    },
+    {
+      "id": "r2-u2",
+      "role": "student",
+      "verbatim": true,
+      "content": "你也不用非要用队友的方案，你可以自己弄，并且队友实例可能比较少或者不全，你可以自己弄"
+    },
+    {
+      "id": "r2-u3",
+      "role": "student",
+      "verbatim": true,
+      "content": "我感觉优化的不够，还能再继续优化"
+    },
+    {
+      "id": "r2-u4",
+      "role": "student",
+      "verbatim": true,
+      "content": "Agent Prompt 按规则只给选手本人可核验的学习贡献计分。这个规则已经放宽，你可以进行实验优化"
     }
   ],
   "conversations": [
@@ -99,6 +128,24 @@
       "role": "student",
       "verbatim": true,
       "content": "我确认了，你提交吧。另外，所有题干里面要求的关于prompt这道题的东西你都做到了吗？因为这个是很难拿到满分的，是比谁的分数更高，我们需要尽量优化到最好。但是优化现在先不用做，我先提交一遍试一试当前的分数。"
+    },
+    {
+      "id": "r2-a1",
+      "role": "agent",
+      "verbatim": true,
+      "content": "远端加赛分支已有一版 MiniVectorDB 和真实学习记录。我会在它上面做增量优化，保留队友的材料。公开驱动采用 JSONL，性能计分主要看精确 TopK。我会先做能回退到原双精度计算的向量筛选，再用同一批查询逐条对照结果和耗时。"
+    },
+    {
+      "id": "r2-a2",
+      "role": "agent",
+      "verbatim": true,
+      "content": "我会保留通过公开用例的存储底座，独立实现和验证性能改动。测试也会扩到公开样例之外，补上随机精确 TopK、事务内读写、强杀恢复，以及受限内存下的数据扫描。学习材料会记录你这次明确要求补足样例的原话和实际验证结果。"
+    },
+    {
+      "id": "r2-a3",
+      "role": "agent",
+      "verbatim": true,
+      "content": "我会继续做一轮独立对照。下一步用紧凑的整数向量先排除不可能进入 TopK 的记录，入围记录仍用原始 FP32 向量和双精度距离排序。是否保留这项改动，由额外占用的内存、三轮耗时和逐条结果对照决定。"
     }
   ],
   "experiments": [
@@ -219,6 +266,30 @@
       "output": "Q05_LARGE_DISTANCE {\"id\": 3, \"ok\": true, \"columns\": [\"id\", \"d\"], \"rows\": [[1, 2.0000000400817547e+20]]}\nQ05_COMPONENT {\"id\": 4, \"ok\": true, \"columns\": [\"id\", \"d\"], \"rows\": [[2, 16777216.00000003]]}\nQ05_OVERFLOW_REJECT {\"id\": 5, \"ok\": false, \"error\": {\"code\": \"invalid_vector\", \"message\": \"vector component is not a finite float32\"}}",
       "follow_up": "为什么查询向量也要先转成 float32，而不是保留 double 参与距离计算？",
       "student_result_explanation": ""
+    },
+    {
+      "id": "r2-e1",
+      "title": "整数摘要是否值得保留",
+      "executed_by": "agent",
+      "command": "taskset -c 0,1 python3 /var/tmp/mvdb-round2-ab-sketch.py",
+      "output": "mvdb-round2-filter 1 write=1.0111 query=0.2755 rss_kib=13280\nmvdb-round2-sketch 1 write=1.0161 query=0.2435 rss_kib=14608\nmvdb-round2-sketch 2 write=1.0029 query=0.2401 rss_kib=14712\nmvdb-round2-filter 2 write=1.0131 query=0.2735 rss_kib=13204\nmvdb-round2-filter 3 write=0.9960 query=0.2662 rss_kib=13124\nmvdb-round2-sketch 3 write=0.9980 query=0.2502 rss_kib=14596\nmvdb-round2-sketch 4 write=0.9880 query=0.2682 rss_kib=14660\nmvdb-round2-filter 4 write=1.0100 query=0.2624 rss_kib=13276\nmvdb-round2-filter 5 write=0.9909 query=0.2776 rss_kib=13268\nmvdb-round2-sketch 5 write=1.0061 query=0.2513 rss_kib=14580\nPASS 5000 exact response comparisons across 5 paired runs and 20 independent brute-force queries\nPASS exact/ANN ties, ±1e38/denormals, illegal vectors, failed transaction statement, SIGKILL and torn tail\nPASS WAL=76207853 bytes under a 64 MiB address-space cap; peak RSS=6252 KiB\n",
+      "interpretation": "两版均已移除完整向量副本。五轮中位查询耗时由 0.2735 s 变为 0.2502 s，RSS 约增加 1.4 MiB，五轮结果一致。保留摘要是查询时间与内存的实测取舍。"
+    },
+    {
+      "id": "r2-e2",
+      "title": "正式公开容器用例",
+      "executed_by": "agent",
+      "command": "docker build --platform linux/amd64 --network host --tag mvdb-round2:final . && python3 protocol_check/run.py --image mvdb-round2:final --output /var/tmp/mvdb-round2-container-final",
+      "output": "官方驱动 20/20 PASS，Linux amd64 容器，测试运行禁用网络，根文件系统只读。包含正常重启、失败语句原子性、向量并列和索引维护。官方驱动同时用通用非 AVX2 本地二进制跑通 20/20。",
+      "interpretation": "公开题包可以验证命令、协议及已公开断言，正式保留用例的结果仍未知。"
+    },
+    {
+      "id": "r2-e3",
+      "title": "最终对照与超公开样例的恢复验证",
+      "executed_by": "agent",
+      "command": "taskset -c 0,1 python3 minivectordb/tests/check_engine.py --baseline /var/tmp/mvdb-round2-before --candidate /var/tmp/mvdb-round2-candidate",
+      "output": "mvdb-round2-before 1 write=1.1222 query=0.4598 rss_kib=18252\nmvdb-round2-candidate 1 write=0.6310 query=0.2000 rss_kib=14648\nmvdb-round2-candidate 2 write=0.6431 query=0.2034 rss_kib=14584\nmvdb-round2-before 2 write=1.1432 query=0.4465 rss_kib=18260\nmvdb-round2-before 3 write=1.1571 query=0.5051 rss_kib=18172\nmvdb-round2-candidate 3 write=0.6871 query=0.2054 rss_kib=14580\nPASS 3000 exact response comparisons across 3 paired runs and 20 independent brute-force queries\nPASS exact/ANN ties, ±1e38/denormals, illegal vectors, failed transaction statement, SIGKILL and torn tail\nPASS 608-row sketch ties, out-of-range query fallback, rollback, and committed index invalidation\nPASS interrupted recovery, WAL=76207853 bytes under a 64 MiB address-space cap; peak RSS=5948 KiB\n",
+      "interpretation": "同机三轮中位：写入 1.1432 s → 0.6431 s，查询 0.4598 s → 0.2034 s，峰值 RSS 18252 → 14584 KiB。逐条结果和独立真值兼顾性能与正确性。强杀恢复、撕裂尾块注入与内存上限补足公开样例没有覆盖的故障。"
     }
   ],
   "student_evidence_units": [
@@ -356,11 +427,17 @@
     "材料限制：学生提供了初始任务、仓库/令牌约束、卡死观察、继续指令，并在提交前确认了第一人称复盘；但学生没有独立设计实验或亲自复测，复盘中的技术细节来自 Agent 的实现和测试记录，本文件不把 Agent 的代码和解释直接计为学生理解。",
     "实现限制：不支持 NULL、JOIN、聚合、子查询、OR、ALTER、DROP、外键、主键更新和嵌套事务；大事务的 overlay 仍在内存中构建。",
     "验证限制：性能数字来自开发机 WSL2，不是评测机；没有实现真正的 IVF/HNSW，ann 模式返回精确结果。",
-    "第一批 Q01 到 Q05 的学生预测来自 A.md，实际输出由 Agent 运行；结果后解释仍在等待学生补充，因此这五个实例目前按 1 分档记录，尚未升级到 1.5 分档。"
+    "第一批 Q01 到 Q05 的学生预测来自 A.md，实际输出由 Agent 运行；结果后解释仍在等待学生补充，因此这五个实例目前按 1 分档记录，尚未升级到 1.5 分档。",
+    "新增记录中的实验由 Agent 执行，用户没有在本轮提供额外个人复盘。正式隐藏用例、平台性能排名与 Prompt 排名均未运行。"
   ],
   "lab_protocol": {
     "questions_file": "Q.md",
     "answers_file": "A.md",
     "note": "学生在A.md先写预测，Agent再运行实验并把实际输出写回Q.md；第一批Q01到Q05的结果后解释等待学生补充。"
+  },
+  "additional_agent_retrospective": {
+    "author": "agent",
+    "confirmed_as_student": false,
+    "content": "先建立未优化提交基线，再单测 SIMD、等值排序位置表、整数摘要和输入扫描。选择功效明确的改动，不改变提交前同步落盘和日志格式。整数摘要把每一维最多半个量化单位的误差转换成距离三角不等式，查询超出量化范围时回到原始计算。对过滤 TopK，先定位等值候选并应用所有谓词，再比较距离与主键。能否获得正式排行分须以平台结果为准。"
   }
 }

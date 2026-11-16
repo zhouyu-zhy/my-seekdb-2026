@@ -226,9 +226,11 @@ struct TableData {
     std::unordered_map<int64_t, DiskRef> refs;
     uint64_t liveBytes = 0;
     uint64_t cachedBytes = 0;
-    bool vecCacheValid = false;
-    std::vector<float> vecCache;
-    std::vector<uint32_t> vecRows;
+    int filterCol = -1;
+    std::vector<uint32_t> filterOrder;
+    bool sketchValid = false;
+    double sketchScale = 0;
+    std::vector<int8_t> vectorSketch;
 };
 
 struct OverlayEntry {
@@ -302,7 +304,6 @@ private:
     void scanRows(uint32_t tableId, const std::function<bool(const Row&)>& fn);
     void maybeCache(TableData& table);
     void dropCache(TableData& table);
-    void buildVectorCache(TableData& table);
 
     // statements
     QueryResult execCreateTable(const CreateTableStmt& st);

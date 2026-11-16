@@ -99,12 +99,16 @@ private:
         expect('"');
         std::string out;
         while (i_ < s_.size()) {
-            char c = s_[i_++];
-            if (c == '"') return out;
-            if (c != '\\') {
-                out.push_back(c);
-                continue;
+            const size_t begin = i_;
+            while (i_ < s_.size() && s_[i_] != '"' && s_[i_] != '\\') {
+                if (static_cast<unsigned char>(s_[i_]) < 0x20) {
+                    throw std::runtime_error("unescaped JSON control character");
+                }
+                ++i_;
             }
+            out.append(s_, begin, i_ - begin);
+            if (i_ >= s_.size()) break;
+            if (s_[i_++] == '"') return out;
             if (i_ >= s_.size()) break;
             char e = s_[i_++];
             switch (e) {
@@ -360,6 +364,8 @@ uint64_t cacheBudget() {
 }  // namespace
 
 int main(int argc, char** argv) {
+    std::ios::sync_with_stdio(false);
+    std::cin.tie(nullptr);
     std::string dataDir;
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];

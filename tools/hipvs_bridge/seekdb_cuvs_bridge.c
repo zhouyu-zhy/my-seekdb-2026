@@ -9,6 +9,7 @@
 #else
 #include <cuda_runtime.h>
 #endif
+#include <pthread.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -21,11 +22,11 @@
  * graph quality at baseline level while roughly halving the build time. */
 #define SK_NN_ITER 50
 #define SK_IVF_MIN_N 4096
-/* The fast path keeps one extra device copy of the dataset alive (cuVS builds
- * the index over the buffers we hand it). Above this dimension that copy is
- * large enough to push the VRAM peak past the baseline envelope, so wide
- * vectors stay on the NN-descent path. */
-#define SK_IVF_MAX_DIM 160
+/* Use bounded staging when the existing full-matrix upload would be large. */
+#define SK_IVF_DIRECT_MAX_DIM 160
+#define SK_IVF_MAX_DIM 512
+#define SK_IVF_UPLOAD_ROWS 16384
+#define SK_QCHECK_WIDE_MIN 0.99
 /* Sampled quality gate for the fast path (see sk_build_ivf_graph). */
 #define SK_QCHECK_MIN 0.94
 #define SK_SAMPLE 256
@@ -47,6 +48,11 @@ typedef struct {
    * is destroyed, because cuVS may reference them without copying) */
   void *graph_buf;
   void *data_buf;
+  pthread_mutex_t search_mutex;
+  void *query_scratch;
+  size_t query_scratch_bytes;
+  cuvsCagraSearchParams_t search_params;
+  size_t default_itopk;
 } sk_cuvs_index;
 
 /* float -> IEEE half, round to nearest even */
@@ -109,6 +115,68 @@ static int sk_build_nn_descent(sk_cuvs_index *h, const float *base, long n, long
   return 0;
 }
 
+/* Fit centroids on a representative sample, then append all vectors with
+ * their original row IDs. Only one partition of the input lives on device
+ * alongside the inverted index. The stage also holds the training sample. */
+static int sk_build_staged_ivf(cuvsResources_t res, cuvsIvfFlatIndexParams_t params,
+                               cuvsIvfFlatIndex_t index, const float *base, long n, long dim)
+{
+  const long capacity = n < SK_IVF_UPLOAD_ROWS ? n : SK_IVF_UPLOAD_ROWS;
+  const size_t row_bytes = (size_t)dim * sizeof(float);
+  const size_t vector_bytes = (size_t)capacity * row_bytes;
+  const size_t id_bytes = (size_t)capacity * sizeof(int64_t);
+  float *sample = (float *)malloc(vector_bytes);
+  int64_t *ids = (int64_t *)malloc(id_bytes);
+  void *vectors_device = NULL;
+  void *ids_device = NULL;
+  int rc = -1;
+  DLManagedTensor vectors, indices = {0};
+  long vector_shape[2];
+  int64_t id_shape = 0;
+  if (!sample || !ids ||
+      cuvsRMMAlloc(res, &vectors_device, vector_bytes) != CUVS_SUCCESS ||
+      cuvsRMMAlloc(res, &ids_device, id_bytes) != CUVS_SUCCESS) goto done;
+  for (long row = 0; row < capacity; ++row) {
+    const size_t source = (size_t)row * (size_t)n / (size_t)capacity;
+    memcpy(sample + (size_t)row * dim, base + source * dim, row_bytes);
+  }
+  if (cudaMemcpy(vectors_device, sample, vector_bytes, cudaMemcpyDefault) != cudaSuccess) goto done;
+  free(sample); sample = NULL;
+  sk_mk_tensor(&vectors, vector_shape, vectors_device, capacity, dim, kDLFloat, 32, 1);
+  params->add_data_on_build = false;
+  params->kmeans_trainset_fraction = 1.0;
+  if (cuvsIvfFlatBuild(res, params, &vectors, index) != CUVS_SUCCESS ||
+      cuvsStreamSync(res) != CUVS_SUCCESS) goto done;
+
+  indices.dl_tensor.data = ids_device;
+  indices.dl_tensor.device.device_type = kDLCUDA;
+  indices.dl_tensor.ndim = 1;
+  indices.dl_tensor.dtype.code = kDLInt;
+  indices.dl_tensor.dtype.bits = 64;
+  indices.dl_tensor.dtype.lanes = 1;
+  indices.dl_tensor.shape = &id_shape;
+  for (long begin = 0; begin < n; begin += capacity) {
+    const long rows = n - begin < capacity ? n - begin : capacity;
+    for (long row = 0; row < rows; ++row) ids[row] = begin + row;
+    if (cudaMemcpy(vectors_device, base + (size_t)begin * dim,
+                   (size_t)rows * row_bytes, cudaMemcpyDefault) != cudaSuccess ||
+        cudaMemcpy(ids_device, ids, (size_t)rows * sizeof(*ids),
+                   cudaMemcpyDefault) != cudaSuccess) goto done;
+    vector_shape[0] = rows;
+    id_shape = rows;
+    if (cuvsIvfFlatExtend(res, &vectors, &indices, index) != CUVS_SUCCESS ||
+        cuvsStreamSync(res) != CUVS_SUCCESS) goto done;
+  }
+  rc = 0;
+done:
+  if (rc != 0 && vectors_device) cuvsStreamSync(res);
+  if (ids_device) cuvsRMMFree(res, ids_device, id_bytes);
+  if (vectors_device) cuvsRMMFree(res, vectors_device, vector_bytes);
+  free(ids);
+  free(sample);
+  return rc;
+}
+
 /* --------------------------------------------------------------------------
  * Fast path.
  *
@@ -119,10 +187,10 @@ static int sk_build_nn_descent(sk_cuvs_index *h, const float *base, long n, long
  *
  * Because such a graph can be much weaker on data where clustering does not
  * reflect the neighbourhood structure, its quality is measured before it is
- * used: SK_SAMPLE rows are queried against the full dataset (full-probe IVF =
- * exact kNN) and the fraction of the exact 32-NN that the candidate graph
- * already contains has to reach SK_QCHECK_MIN. Two probe widths are tried; if
- * neither qualifies the caller falls back to NN-descent.
+ * used: SK_SAMPLE rows are queried against the full dataset. The candidate
+ * graph must cover enough of those exact neighbors at one of the allowed
+ * probe widths. Staged builds check up to 100 neighbors after excluding the
+ * query itself. If the quality check fails, the caller uses NN-descent.
  * ------------------------------------------------------------------------ */
 static int sk_build_ivf_graph(sk_cuvs_index *h, const float *base, long n, long dim)
 {
@@ -148,6 +216,9 @@ static int sk_build_ivf_graph(sk_cuvs_index *h, const float *base, long n, long 
   float *hed_d = 0, *had_d = 0;
   int idx_ready = 0;
   const int use_f16 = (dim > SK_F16_DIM);
+  const int staged = dim > SK_IVF_DIRECT_MAX_DIM;
+  const long exact_k = staged ? 101 : SK_EXACT_K;  /* one entry can be the query itself */
+  const size_t graph_bytes = sizeof(unsigned) * (size_t)n * gd;
 
   if (use_f16) {
     size_t nv = (size_t)n * (size_t)dim;
@@ -157,7 +228,7 @@ static int sk_build_ivf_graph(sk_cuvs_index *h, const float *base, long n, long 
     if (cuvsRMMAlloc(h->res, (void **)&dxh, 2 * nv) != CUVS_SUCCESS) goto done;
     if (cudaMemcpy(dxh, hch, 2 * nv, cudaMemcpyDefault) != cudaSuccess) goto done;
     free(hch); hch = 0;
-  } else {
+  } else if (!staged) {
     if (cuvsRMMAlloc(h->res, (void **)&dx, sizeof(float) * (size_t)n * dim) != CUVS_SUCCESS) goto done;
     if (cudaMemcpy(dx, base, sizeof(float) * (size_t)n * dim, cudaMemcpyDefault) != cudaSuccess) goto done;
   }
@@ -173,7 +244,9 @@ static int sk_build_ivf_graph(sk_cuvs_index *h, const float *base, long n, long 
   fip->kmeans_n_iters = 10;
   fip->add_data_on_build = true;
   if (cuvsIvfFlatIndexCreate(&fidx) != CUVS_SUCCESS) goto done;
-  {
+  if (staged) {
+    if (sk_build_staged_ivf(h->res, fip, fidx, base, n, dim) != 0) goto done;
+  } else {
     DLManagedTensor dset; long ds[2] = {n, dim};
     if (use_f16) sk_mk_tensor(&dset, ds, dxh, n, dim, kDLFloat, 16, 1);
     else          sk_mk_tensor(&dset, ds, dx,  n, dim, kDLFloat, 32, 1);
@@ -185,7 +258,7 @@ static int sk_build_ivf_graph(sk_cuvs_index *h, const float *base, long n, long 
   if (dx != 0) { cuvsRMMFree(h->res, dx, sizeof(float) * (size_t)n * dim); dx = 0; }
   if (cuvsIvfFlatSearchParamsCreate(&fsp) != CUVS_SUCCESS) goto done;
   {
-    uint32_t probes[2];
+    uint32_t probes[3];
     int attempt, accepted_probes = 0;
     long step = n / SK_SAMPLE;
     long s;
@@ -210,11 +283,11 @@ static int sk_build_ivf_graph(sk_cuvs_index *h, const float *base, long n, long 
       if (cuvsRMMAlloc(h->res, (void **)&dqs, sizeof(float) * (size_t)SK_SAMPLE * dim) != CUVS_SUCCESS) goto done;
       if (cudaMemcpy(dqs, hq, sizeof(float) * (size_t)SK_SAMPLE * dim, cudaMemcpyDefault) != cudaSuccess) goto done;
     }
-    if (cuvsRMMAlloc(h->res, (void **)&hex_d, sizeof(long long) * (size_t)SK_SAMPLE * SK_EXACT_K) != CUVS_SUCCESS) goto done;
-    if (cuvsRMMAlloc(h->res, (void **)&hed_d, sizeof(float) * (size_t)SK_SAMPLE * SK_EXACT_K) != CUVS_SUCCESS) goto done;
+    if (cuvsRMMAlloc(h->res, (void **)&hex_d, sizeof(long long) * (size_t)SK_SAMPLE * exact_k) != CUVS_SUCCESS) goto done;
+    if (cuvsRMMAlloc(h->res, (void **)&hed_d, sizeof(float) * (size_t)SK_SAMPLE * exact_k) != CUVS_SUCCESS) goto done;
     if (cuvsRMMAlloc(h->res, (void **)&hap_d, sizeof(long long) * (size_t)SK_SAMPLE * gd) != CUVS_SUCCESS) goto done;
     if (cuvsRMMAlloc(h->res, (void **)&had_d, sizeof(float) * (size_t)SK_SAMPLE * gd) != CUVS_SUCCESS) goto done;
-    hex_h = (long long *)malloc(sizeof(long long) * (size_t)SK_SAMPLE * SK_EXACT_K);
+    hex_h = (long long *)malloc(sizeof(long long) * (size_t)SK_SAMPLE * exact_k);
     hap_h = (long long *)malloc(sizeof(long long) * (size_t)SK_SAMPLE * gd);
     if (hex_h == 0 || hap_h == 0) goto done;
     {
@@ -224,17 +297,20 @@ static int sk_build_ivf_graph(sk_cuvs_index *h, const float *base, long n, long 
       nf.type = NO_FILTER; nf.addr = (uintptr_t)0;
       if (use_f16) sk_mk_tensor(&qt, as, dqs16, SK_SAMPLE, dim, kDLFloat, 16, 1);
       else          sk_mk_tensor(&qt, as, dqs, SK_SAMPLE, dim, kDLFloat, 32, 1);
-      sk_mk_tensor(&nt, bs, hex_d, SK_SAMPLE, SK_EXACT_K, kDLInt, 64, 1);
-      sk_mk_tensor(&dt, cs, hed_d, SK_SAMPLE, SK_EXACT_K, kDLFloat, 32, 1);
+      sk_mk_tensor(&nt, bs, hex_d, SK_SAMPLE, exact_k, kDLInt, 64, 1);
+      sk_mk_tensor(&dt, cs, hed_d, SK_SAMPLE, exact_k, kDLFloat, 32, 1);
       sk_mk_tensor(&n2, es, hap_d, SK_SAMPLE, gd, kDLInt, 64, 1);
       sk_mk_tensor(&d2, fs, had_d, SK_SAMPLE, gd, kDLFloat, 32, 1);
       fsp->n_probes = fip->n_lists;   /* full probe == exact kNN */
       if (cuvsIvfFlatSearch(h->res, fsp, fidx, &qt, &nt, &dt, nf) != CUVS_SUCCESS) goto done;
-      if (cudaMemcpy(hex_h, hex_d, sizeof(long long) * (size_t)SK_SAMPLE * SK_EXACT_K,
+      if (cudaMemcpy(hex_h, hex_d, sizeof(long long) * (size_t)SK_SAMPLE * exact_k,
                      cudaMemcpyDefault) != cudaSuccess) goto done;
       probes[0] = (uint32_t)(fip->n_lists / 32 > 0 ? fip->n_lists / 32 : 1);
       probes[1] = (uint32_t)(fip->n_lists / 8 > 0 ? fip->n_lists / 8 : 1);
-      for (attempt = 0; attempt < 2 && accepted_probes == 0; ++attempt) {
+      probes[2] = (uint32_t)(fip->n_lists / 4);
+      const int attempts = staged ? 3 : 2;
+      const double minimum = staged ? SK_QCHECK_WIDE_MIN : SK_QCHECK_MIN;
+      for (attempt = 0; attempt < attempts && accepted_probes == 0; ++attempt) {
         long hit = 0, tot = 0;
         fsp->n_probes = probes[attempt];
         if (cuvsIvfFlatSearch(h->res, fsp, fidx, &qt, &n2, &d2, nf) != CUVS_SUCCESS) goto done;
@@ -242,8 +318,8 @@ static int sk_build_ivf_graph(sk_cuvs_index *h, const float *base, long n, long 
                        cudaMemcpyDefault) != cudaSuccess) goto done;
         for (s = 0; s < SK_SAMPLE; ++s) {
           long k, j;
-          for (k = 0; k < SK_EXACT_K; ++k) {
-            long long v = hex_h[s * SK_EXACT_K + k];
+          for (k = 0; k < exact_k; ++k) {
+            long long v = hex_h[s * exact_k + k];
             if (v < 0 || v == s * step) { continue; }
             ++tot;
             for (j = 0; j < gd; ++j) {
@@ -251,7 +327,9 @@ static int sk_build_ivf_graph(sk_cuvs_index *h, const float *base, long n, long 
             }
           }
         }
-        if (tot > 0 && (double)hit / (double)tot >= SK_QCHECK_MIN) { accepted_probes = (int)probes[attempt]; }
+        if (tot > 0 && (double)hit / (double)tot >= minimum) {
+          accepted_probes = (int)probes[attempt];
+        }
       }
       if (accepted_probes == 0) goto done;   /* too weak -> NN-descent */
       fsp->n_probes = (uint32_t)accepted_probes;
@@ -259,8 +337,8 @@ static int sk_build_ivf_graph(sk_cuvs_index *h, const float *base, long n, long 
     /* release the probe buffers */
     free(hex_h); hex_h = 0;
     free(hap_h); hap_h = 0;
-    cuvsRMMFree(h->res, hex_d, sizeof(long long) * (size_t)SK_SAMPLE * SK_EXACT_K); hex_d = 0;
-    cuvsRMMFree(h->res, hed_d, sizeof(float) * (size_t)SK_SAMPLE * SK_EXACT_K); hed_d = 0;
+    cuvsRMMFree(h->res, hex_d, sizeof(long long) * (size_t)SK_SAMPLE * exact_k); hex_d = 0;
+    cuvsRMMFree(h->res, hed_d, sizeof(float) * (size_t)SK_SAMPLE * exact_k); hed_d = 0;
     cuvsRMMFree(h->res, hap_d, sizeof(long long) * (size_t)SK_SAMPLE * gd); hap_d = 0;
     cuvsRMMFree(h->res, had_d, sizeof(float) * (size_t)SK_SAMPLE * gd); had_d = 0;
     cuvsRMMFree(h->res, dqs, sizeof(float) * (size_t)SK_SAMPLE * dim); dqs = 0;
@@ -271,7 +349,7 @@ static int sk_build_ivf_graph(sk_cuvs_index *h, const float *base, long n, long 
   }
 
   /* ---- full self-kNN, chunked, written straight into the device graph ---- */
-  if (cuvsRMMAlloc(h->res, (void **)&dgraph, sizeof(unsigned) * (size_t)n * gd) != CUVS_SUCCESS) goto done;
+  if (!staged && cuvsRMMAlloc(h->res, (void **)&dgraph, graph_bytes) != CUVS_SUCCESS) goto done;
   if (use_f16) {
     if (cuvsRMMAlloc(h->res, (void **)&dqc16, 2 * (size_t)SK_CHUNK * dim) != CUVS_SUCCESS) goto done;
     hch = (unsigned short *)malloc(2 * (size_t)SK_CHUNK * dim);
@@ -282,7 +360,7 @@ static int sk_build_ivf_graph(sk_cuvs_index *h, const float *base, long n, long 
   if (cuvsRMMAlloc(h->res, (void **)&dnc, sizeof(long long) * (size_t)SK_CHUNK * K) != CUVS_SUCCESS) goto done;
   if (cuvsRMMAlloc(h->res, (void **)&ddc, sizeof(float) * (size_t)SK_CHUNK * K) != CUVS_SUCCESS) goto done;
   hnc = (long long *)malloc(sizeof(long long) * (size_t)SK_CHUNK * K);
-  hgraph = (unsigned *)malloc(sizeof(unsigned) * (size_t)SK_CHUNK * gd);
+  hgraph = (unsigned *)malloc(staged ? graph_bytes : sizeof(unsigned) * (size_t)SK_CHUNK * gd);
   if (hnc == 0 || hgraph == 0) goto done;
   {
     long start;
@@ -310,7 +388,7 @@ static int sk_build_ivf_graph(sk_cuvs_index *h, const float *base, long n, long 
       if (cudaMemcpy(hnc, dnc, sizeof(long long) * (size_t)rows * K, cudaMemcpyDefault) != cudaSuccess) goto done;
       for (r = 0; r < rows; ++r) {
         long w = 0, j;
-        unsigned *grow = hgraph + (size_t)r * gd;
+        unsigned *grow = hgraph + (size_t)(staged ? start + r : r) * gd;
         long long self = start + r;
         for (j = 0; j < K && w < gd; ++j) {
           long long v = hnc[r * K + j];
@@ -322,12 +400,12 @@ static int sk_build_ivf_graph(sk_cuvs_index *h, const float *base, long n, long 
           ++w;
         }
       }
-      if (cudaMemcpy((char *)dgraph + (size_t)start * gd * sizeof(unsigned), hgraph,
+      if (!staged && cudaMemcpy((char *)dgraph + (size_t)start * gd * sizeof(unsigned), hgraph,
                      sizeof(unsigned) * (size_t)rows * gd, cudaMemcpyDefault) != cudaSuccess) goto done;
     }
   }
   free(hnc); hnc = 0;
-  free(hgraph); hgraph = 0;
+  if (!staged) { free(hgraph); hgraph = 0; }
   if (hch != 0) { free(hch); hch = 0; }
   cuvsRMMFree(h->res, ddc, sizeof(float) * (size_t)SK_CHUNK * K); ddc = 0;
   cuvsRMMFree(h->res, dnc, sizeof(long long) * (size_t)SK_CHUNK * K); dnc = 0;
@@ -339,6 +417,13 @@ static int sk_build_ivf_graph(sk_cuvs_index *h, const float *base, long n, long 
   cuvsIvfFlatSearchParamsDestroy(fsp); fsp = 0;
   cuvsIvfFlatIndexDestroy(fidx); fidx = 0;
   cuvsIvfFlatIndexParamsDestroy(fip); fip = 0;
+
+  if (staged) {
+    if (cuvsStreamSync(h->res) != CUVS_SUCCESS ||
+        cuvsRMMAlloc(h->res, (void **)&dgraph, graph_bytes) != CUVS_SUCCESS ||
+        cudaMemcpy(dgraph, hgraph, graph_bytes, cudaMemcpyDefault) != cudaSuccess) goto done;
+    free(hgraph); hgraph = 0;
+  }
 
   {
     DLManagedTensor gt, dt2;
@@ -363,6 +448,7 @@ static int sk_build_ivf_graph(sk_cuvs_index *h, const float *base, long n, long 
   rc = 0;
 
 done:
+  if (rc != 0 && staged) cuvsStreamSync(h->res);
   if (rc != 0 && idx_ready) { cuvsCagraIndexDestroy(h->idx); h->idx = 0; }
   if (hex_h != 0) { free(hex_h); }
   if (hap_h != 0) { free(hap_h); }
@@ -372,8 +458,8 @@ done:
   if (fsp != 0) { cuvsIvfFlatSearchParamsDestroy(fsp); }
   if (fidx != 0) { cuvsIvfFlatIndexDestroy(fidx); }
   if (fip != 0) { cuvsIvfFlatIndexParamsDestroy(fip); }
-  if (hex_d != 0) { cuvsRMMFree(h->res, hex_d, sizeof(long long) * (size_t)SK_SAMPLE * SK_EXACT_K); }
-  if (hed_d != 0) { cuvsRMMFree(h->res, hed_d, sizeof(float) * (size_t)SK_SAMPLE * SK_EXACT_K); }
+  if (hex_d != 0) { cuvsRMMFree(h->res, hex_d, sizeof(long long) * (size_t)SK_SAMPLE * exact_k); }
+  if (hed_d != 0) { cuvsRMMFree(h->res, hed_d, sizeof(float) * (size_t)SK_SAMPLE * exact_k); }
   if (hap_d != 0) { cuvsRMMFree(h->res, hap_d, sizeof(long long) * (size_t)SK_SAMPLE * gd); }
   if (had_d != 0) { cuvsRMMFree(h->res, had_d, sizeof(float) * (size_t)SK_SAMPLE * gd); }
   if (dqs != 0) { cuvsRMMFree(h->res, dqs, sizeof(float) * (size_t)SK_SAMPLE * dim); }
@@ -393,10 +479,13 @@ void* seekdb_cuvs_build(const float* base, long n, long dim)
 {
   sk_cuvs_index* h = (sk_cuvs_index*)calloc(1, sizeof(*h));
   if (!h) return NULL;
-  if (cuvsResourcesCreate(&h->res) != CUVS_SUCCESS) { free(h); return NULL; }
+  if (pthread_mutex_init(&h->search_mutex, NULL) != 0) { free(h); return NULL; }
+  if (cuvsResourcesCreate(&h->res) != CUVS_SUCCESS) goto fail;
   if (cuvsCagraIndexParamsCreate(&h->ip) != CUVS_SUCCESS) goto fail_res;
 
-  if (n >= SK_IVF_MIN_N && dim > 0 && dim <= SK_IVF_MAX_DIM &&
+  if (n >= SK_IVF_MIN_N && n <= UINT32_MAX && dim > 0 && dim <= SK_IVF_MAX_DIM &&
+      (size_t)n <= SIZE_MAX / sizeof(float) / (size_t)dim &&
+      (size_t)n <= SIZE_MAX / sizeof(unsigned) / SK_GRAPH_DEGREE &&
       sk_build_ivf_graph(h, base, n, dim) == 0) {
     h->n = n; h->dim = dim;
     return h;
@@ -409,6 +498,8 @@ void* seekdb_cuvs_build(const float* base, long n, long dim)
   cuvsCagraIndexParamsDestroy(h->ip);
 fail_res:
   cuvsResourcesDestroy(h->res);
+fail:
+  pthread_mutex_destroy(&h->search_mutex);
   free(h);
   fprintf(stderr, "[seekdb_cuvs] build failed: %s\n", cuvsGetLastErrorText());
   return NULL;
@@ -434,14 +525,41 @@ int seekdb_cuvs_search(void* handle, const float* query, long nq, long topk,
       ids_offset + ids_span > SIZE_MAX - distance_bytes) return 1;
   const size_t distances_offset = ids_offset + ids_span;
   const size_t scratch_bytes = distances_offset + distance_bytes;
+  /* Most individual SQL searches fit in one small per-index allocation. */
+  const size_t retain_limit = 64 * 1024;
   void *allocation = NULL;
-  if (cuvsRMMAlloc(h->res, &allocation, scratch_bytes) != CUVS_SUCCESS) return 10;
+  unsigned short *qh16 = NULL;
+  int rc = 0;
+  pthread_mutex_lock(&h->search_mutex);
+  if (scratch_bytes <= h->query_scratch_bytes) {
+    allocation = h->query_scratch;
+  } else {
+    size_t bytes = scratch_bytes;
+    if (bytes <= retain_limit) {
+      bytes = 4096;
+      while (bytes < scratch_bytes) bytes *= 2;
+    }
+    if (cuvsRMMAlloc(h->res, &allocation, bytes) != CUVS_SUCCESS) {
+      rc = 10;
+      goto done;
+    }
+    if (bytes <= retain_limit) {
+      if (h->query_scratch) cuvsRMMFree(h->res, h->query_scratch, h->query_scratch_bytes);
+      h->query_scratch = allocation;
+      h->query_scratch_bytes = bytes;
+    }
+  }
+  if (!h->search_params) {
+    if (cuvsCagraSearchParamsCreate(&h->search_params) != CUVS_SUCCESS) {
+      rc = 14;
+      goto done;
+    }
+    h->default_itopk = h->search_params->itopk_size;
+  }
+  cuvsCagraSearchParams_t sp = h->search_params;
   unsigned char *scratch = (unsigned char *)allocation;
   unsigned *nd = (unsigned *)(scratch + ids_offset);
   float *dd = (float *)(scratch + distances_offset);
-  int rc = 0;
-  cuvsCagraSearchParams_t sp = NULL;
-  unsigned short *qh16 = NULL;
   if (h->f16) {
     size_t nv = (size_t)nq * (size_t)h->dim, i;
     qh16 = (unsigned short*)malloc(2 * nv);
@@ -461,11 +579,10 @@ int seekdb_cuvs_search(void* handle, const float* query, long nq, long topk,
     qt.dl_tensor.shape=qs; qt.dl_tensor.strides=0; qt.dl_tensor.byte_offset=0;
     nt=qt; nt.dl_tensor.data=nd; nt.dl_tensor.dtype.code=kDLUInt; nt.dl_tensor.shape=nsh;
     dt=qt; dt.dl_tensor.data=dd; dt.dl_tensor.dtype.code=kDLFloat; dt.dl_tensor.shape=dsh;
-    if (cuvsCagraSearchParamsCreate(&sp) != CUVS_SUCCESS) { rc=14; goto done; }
     {
       size_t required_itopk = (size_t)topk * 4;
       if (required_itopk < 512) required_itopk = 512;
-      if (sp->itopk_size < required_itopk) sp->itopk_size = required_itopk;
+      sp->itopk_size = h->default_itopk > required_itopk ? h->default_itopk : required_itopk;
       sp->search_width = 4;
     }
     cuvsFilter f; f.type=NO_FILTER; f.addr=(uintptr_t)0;
@@ -477,10 +594,15 @@ int seekdb_cuvs_search(void* handle, const float* query, long nq, long topk,
     }
   }
 done:
-  if (sp) cuvsCagraSearchParamsDestroy(sp);
+  if (rc) {
+    fprintf(stderr, "[seekdb_cuvs] search rc=%d: %s\n", rc, cuvsGetLastErrorText());
+    cuvsStreamSync(h->res);
+  }
   if (qh16) free(qh16);
-  cuvsRMMFree(h->res, scratch, scratch_bytes);
-  if (rc) fprintf(stderr, "[seekdb_cuvs] search rc=%d: %s\n", rc, cuvsGetLastErrorText());
+  if (allocation && allocation != h->query_scratch) {
+    cuvsRMMFree(h->res, allocation, scratch_bytes);
+  }
+  pthread_mutex_unlock(&h->search_mutex);
   return rc;
 }
 
@@ -488,6 +610,9 @@ void seekdb_cuvs_free(void* handle)
 {
   sk_cuvs_index* h = (sk_cuvs_index*)handle;
   if (!h) return;
+  if (h->search_params) cuvsCagraSearchParamsDestroy(h->search_params);
+  if (h->query_scratch) cuvsRMMFree(h->res, h->query_scratch, h->query_scratch_bytes);
+  pthread_mutex_destroy(&h->search_mutex);
   cuvsCagraIndexDestroy(h->idx);
   cuvsCagraIndexParamsDestroy(h->ip);
   if (h->graph_buf != 0) {
@@ -519,6 +644,7 @@ void* seekdb_cuvs_deserialize(const char* filename, long n, long dim)
   if (!filename || n <= 0 || dim <= 0) return NULL;
   sk_cuvs_index* index = (sk_cuvs_index*)calloc(1, sizeof(*index));
   if (!index) return NULL;
+  if (pthread_mutex_init(&index->search_mutex, NULL) != 0) { free(index); return NULL; }
   if (cuvsResourcesCreate(&index->res) != CUVS_SUCCESS) goto fail;
   if (cuvsCagraIndexParamsCreate(&index->ip) != CUVS_SUCCESS) goto fail_res;
   if (cuvsCagraIndexCreate(&index->idx) != CUVS_SUCCESS) goto fail_ip;
@@ -545,6 +671,7 @@ fail_res:
   cuvsResourcesDestroy(index->res);
 fail:
   fprintf(stderr, "[seekdb_cuvs] deserialize failed: %s\n", cuvsGetLastErrorText());
+  pthread_mutex_destroy(&index->search_mutex);
   free(index);
   return NULL;
 }

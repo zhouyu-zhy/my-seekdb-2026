@@ -1,135 +1,182 @@
-# hipVS/CAGRA build fast path (`lib=cuvs`)
+# seekdb × AMD hipVS: CAGRA build acceleration (`lib=cuvs`)
 
-This note documents the change made to `tools/hipvs_bridge/seekdb_cuvs_bridge.c`
-for the "seekdb x AMD hipVS, accelerate HNSW/CAGRA index build" task, plus how to
-reproduce the numbers.
+This document is the implementation note, the reproducible test method and the
+CPU/GPU build performance comparison for the `lib=cuvs` offline-DDL path of
+seekdb. Everything below can be reproduced with the scripts in
+[`bench/`](bench) on a machine that has hipVS at `/opt/hipvs`, ROCm at `/opt/rocm`
+and a seekdb build at `build_release/`.
 
-## 1. Where the baseline build time goes
+## 1. Where the build time goes
 
-The frozen baseline builds the CAGRA graph with cuVS `NN_DESCENT`
+The frozen V5 baseline builds the CAGRA graph with cuVS `NN_DESCENT`
 (`graph_degree=128`, `intermediate_graph_degree=256`, `nn_descent_niter=100`).
+On 250K x 128 FP32/L2 that single phase is 41.1 s of a 44.3 s end-to-end build
+(the rest is table scan, index commit and the CAGRA snapshot write).
 
-Measured on one W7900-class Radeon GPU (ROCm 7.2.4, 250K x 128 FP32, L2):
+NN-descent is *gather bound*: every iteration walks the graph and then fetches
+`intermediate_graph_degree` scattered rows per node, so the GPU runs at roughly
+1% of its distance-computation peak. Measured knobs that do **not** pay off:
 
-| phase (baseline) | time |
-| --- | ---: |
-| cuVS `cuvsCagraBuild` (NN-descent) | 41.1 s |
-| `cuvsCagraSerialize` (graph + dataset) | 0.2 s |
-| table scan / bridge hand-off / index commit | ~3 s |
+| knob | build time | Recall@10 |
+| --- | ---: | ---: |
+| baseline (`igd=256`, `niter=100`) | 41.1 s | 0.9300 |
+| `niter=50` | 25.3 s | 0.9283 |
+| `niter=12` | 6.5 s | 0.8799 |
+| FP16 vectors, `niter=100` | 42.1 s | 0.9326 |
 
-So >90% of the measured window is the graph construction itself.
+(256-dim uniform set, standalone cuVS harness.)
 
-NN-descent is *gather bound*: every iteration follows graph edges and then
-fetches ~`intermediate_graph_degree` scattered rows per node. The arithmetic
-intensity is tiny, so the GPU runs far away from its FLOP peak (~40 GFLOP/s
-observed vs. tens of TFLOPS available). Reducing iterations, intermediate
-degree, or precision barely helps without losing recall (`niter=12` lowers
-Recall@10 from 0.9300 to 0.8799 on a 256-dim set), and FP16 vectors changed the
-build time by <1%.
+## 2. What the candidate does
 
-## 2. The fast path
+IVF-Flat keeps its vectors in row-major inverted lists, so "probe 3% of the
+corpus" becomes a handful of dense GEMM batches instead of random gathers. That
+is used to produce the kNN graph itself:
 
-IVF-Flat keeps its vectors in row-major inverted lists, so "10% of the corpus"
-becomes a few dense GEMM batches instead of random gathers. We use it to
-produce the 128-NN graph directly:
+1. `cuvsIvfFlatBuild` over the base vectors on the GPU (`n_lists ~ 2*sqrt(n)`);
+2. query the base vectors **against themselves** in chunks
+   (`k = graph_degree + 1`, `n_probes ~ n_lists/32`), drop the self hit and
+   stream the ids straight into a device `uint32` graph;
+3. hand graph + dataset to `cuvsCagraIndexFromArgs`, so the index that is
+   searched is a regular cuVS CAGRA index searched by the stock
+   `cuvsCagraSearch` with the baseline parameters.
 
-1. build `cuvsIvfFlatIndex` over the base vectors on the GPU (`n_lists ~ 2*sqrt(n)`);
-2. query *the base vectors against themselves* in chunks
-   (`k = graph_degree + 1`, `n_probes ~ n_lists/32`, ~3% of the corpus), drop the
-   self hit, and stream the ids straight into a device `uint32` graph;
-3. hand the graph + dataset to `cuvsCagraIndexFromArgs`, i.e. the index that is
-   searched is still a regular cuVS CAGRA index searched by the stock
-   `cuvsCagraSearch`; only the graph construction changed.
+Kept identical to the baseline: `graph_degree=128`, `itopk >= max(4k,512)`,
+`search_width=4`, the SQL/DDL path, the snapshot format and the `lib=vsag` path.
 
-## 3. Keeping recall honest (quality gate)
+### 2.1 Quality gate
 
-A cheap kNN graph can be much weaker when the data has no cluster structure
-(uniform random 256-d, where IVF cells do not reflect neighbourhoods). Before
-the graph is accepted, the bridge measures its quality:
-
-* `SK_SAMPLE=256` rows are queried against the whole dataset with a **full
-  probe** IVF search, which is exact kNN;
-* the same rows are queried with the cheap probe width;
-* the fraction of the exact 32-NN already present in the candidate 128-NN graph
-  must reach `SK_QCHECK_MIN=0.94`, otherwise the probe width is doubled once and
-  then the path is abandoned.
-
-If the fast path is abandoned (or the dimension exceeds `SK_IVF_MAX_DIM=160`,
-where the extra device copy of the dataset would push the VRAM peak out of the
-baseline envelope), the code falls back to NN-descent with the cheaper build
-knobs `intermediate_graph_degree=128` / `nn_descent_niter=50`.
-
-Measured gate separation:
+A cheap kNN graph is much weaker when the data has no cluster structure, so the
+graph is validated before it is used: `SK_SAMPLE` rows are queried against the
+whole dataset with a full probe (exact kNN), and the fraction of the exact 32-NN
+that the candidate graph already contains must reach `SK_QCHECK_MIN=0.94`.
+Two probe widths are tried, then the path is abandoned and the build falls back
+to NN-descent with `intermediate_graph_degree=128`, `nn_descent_niter=50`.
 
 | data | sampled graph recall@32 | decision |
 | --- | ---: | --- |
 | SIFT 250K x 128 | 0.952 | fast path |
-| SIFT-like 250K x 256 | 0.95+ | fast path (dim gate applies) |
-| uniform random 250K x 256 | 0.37 | NN-descent fallback |
+| uniform random 250K x 256 | 0.367 | NN-descent fallback |
 
-`graph_degree` (128) and the search parameters (`itopk >= max(4k,512)`,
-`search_width=4`) are untouched, so the query path is bit-for-bit the baseline
-one.
+### 2.2 Dimension gate
 
-## 4. Results (single Radeon GPU, 250K vectors, FP32/L2, one measurement each)
+`cuvsCagraIndexFromArgs` does not copy its inputs (verified with
+`cuvsCagraIndexGetGraph`/`GetDataset`: the index returns our pointers), so the
+bridge has to keep one device copy of graph + dataset alive for the index
+lifetime. Above `SK_IVF_MAX_DIM=160` that copy is large enough to push the VRAM
+peak out of the baseline envelope, so wide vectors go straight to NN-descent.
 
-| dataset | baseline build | candidate build | speed-up | Recall@10 baseline -> candidate | Recall@100 | QPS top-10 / top-100 |
-| --- | ---: | ---: | ---: | --- | --- | --- |
-| SIFT250K x 128 | 44.28 s | 3.96 s | **11.2x** | 1.0000 -> 0.9992 | 1.0000 -> 0.9991 | 40.9/40.6 -> 42.1/41.6 |
-| SIFT-like 250K x 256 | 49.58 s | 23.84 s | **2.08x** | 1.0000 -> 0.9998* | 1.0000 -> 0.9993* | parity |
-| uniform random 250K x 256 (hard) | 48.50 s | 24.10 s | **2.01x** | 0.9295 -> 0.9271 | 0.8644 -> 0.8628 | 40.3/38.8 -> 41.2/38.8 |
-
-\* NN-descent configuration measured standalone (`igd=128`, `niter=50`).
-
-Timing follows the contest definition: from `CREATE VECTOR INDEX ... lib=cuvs`
-until the first fixed query returns.
-
-VRAM peak (`mem_info_vram_used`, sampled every 200 ms):
-
-| dataset | baseline peak | candidate peak | ratio |
-| --- | ---: | ---: | ---: |
-| SIFT250K x 128 | 700 MiB | 848 MiB | 1.21x |
-| 250K x 256 (fallback) | 682 MiB | 682 MiB | 1.00x |
-
-## 5. Reproduce
+## 3. Reproducible test method
 
 ```bash
-# 1. build the bridge
-HIPVS_ROOT=/opt/hipvs ROCM_ROOT=/opt/rocm \
-  tools/hipvs_bridge/build.sh "$PWD/out/libseekdb_cuvs_bridge.so"
+# 0. environment: hipVS /opt/hipvs, ROCm /opt/rocm, seekdb sources in $REPO
+export REPO=$PWD
 
-# 2. build seekdb exactly as the contest does
+# 1. hipVS bridge (contest command)
+HIPVS_ROOT=/opt/hipvs ROCM_ROOT=/opt/rocm \
+  tools/hipvs_bridge/build.sh /root/out_cand/libseekdb_cuvs_bridge.so
+
+# 2. seekdb (contest command)
 cmake -S . -B build_release -G "Unix Makefiles" \
   -DCMAKE_BUILD_TYPE=RelWithDebInfo -DOB_ENABLE_UNITY=ON -DOB_USE_LLD=ON \
   -DOB_BUILD_CUVS=ON -DOB_BUILD_CUVS_TRACE=OFF \
-  -DCUVS_BRIDGE_LIB="$PWD/out/libseekdb_cuvs_bridge.so"
-cmake --build build_release --target seekdb
+  -DCUVS_BRIDGE_LIB=/root/out_cand/libseekdb_cuvs_bridge.so
+cmake --build build_release --target seekdb -j 64
 
-# 3. run
-LD_LIBRARY_PATH=$PWD/out:/opt/hipvs/lib \
-  build_release/src/observer/seekdb --nodaemon --base-dir=<dir> \
-  --data-dir=<dir>/store --redo-dir=<dir>/store/redo --port=2881
+# 3. datasets (SIFT250K and a 256-dim proxy of the hidden workload)
+python3 tools/hipvs_bridge/bench/gen_data.py --sift-dir /root/sift --out-dir /root/data
+
+# 4. three-way comparison, all on the same machine and data
+bash tools/hipvs_bridge/bench/run_bench.sh --nq 512
 ```
 
-```sql
-CREATE TABLE t(id INT PRIMARY KEY, v VECTOR(128));
--- LOAD DATA ... (250K rows)
-CREATE VECTOR INDEX idx ON t(v)
-  WITH (distance=l2, type=hnsw, lib=cuvs, m=16, ef_construction=200, ef_search=64);
-SELECT id FROM t ORDER BY l2_distance(v, '<query>') APPROXIMATE LIMIT 10;
-```
+`bench.py` reproduces the contest measurement:
 
-The build time reported above is the wall clock of the `CREATE VECTOR INDEX`
-statement plus the first `SELECT`.
+* load the vectors into a plain table (no index, `LOAD DATA` equivalent);
+* time `CREATE VECTOR INDEX idx ON items(v) WITH (distance=l2, type=hnsw,
+  lib=<cuvs|vsag>, m=16, ef_construction=200, ef_search=64)` **plus the first
+  fixed `SELECT ... APPROXIMATE LIMIT 100`** (the lazy-build guard);
+* run `nq` single-row approximate queries for Top-10 / Top-100, report QPS,
+  Recall@10 / Recall@100 against an exact brute-force ground truth, and fail loudly
+  if a query does not return `k` distinct ids (`result_integrity`);
+* sample the GPU VRAM of the server process from
+  `/sys/class/drm/card*/device/mem_info_vram_used` every 200 ms.
 
-## 6. Constraints respected
+The CPU row (`lib=vsag`) is the seekdb VSAG HNSW build path, the GPU rows use
+the same server binary and only swap the bridge `.so` (the frozen V5 bridge is
+extracted with `git show 634888d9b:tools/hipvs_bridge/seekdb_cuvs_bridge.c`).
 
-* no change to hipVS/cuVS: the bridge only calls public C API entry points
-  (`cuvsIvfFlat*`, `cuvsCagraIndexFromArgs`, `cuvsCagraSearch`);
-* the searched index is a stock cuVS CAGRA index and queries still go through
-  `cuvsCagraSearch` with the baseline parameters;
-* `lib=vsag` path untouched;
-* FP32 in, FP32 out; the injected graph never leaves the GPU;
-* `graph_degree` and the SQL/index options are unchanged, so no recall is traded
-  for speed on the datasets where the fast path is taken, and the quality gate
-  keeps the fallback graph at baseline quality.
+### 3.1 Repeatability
+
+Two runs of the driver above on the same machine:
+
+| run | CPU `lib=vsag` | GPU baseline | GPU candidate | ratio |
+| --- | ---: | ---: | ---: | ---: |
+| 1 | 80.48 s | 44.88 s | 4.53 s | 9.91x |
+| 2 | 81.10 s | 49.12 s | 4.63 s | 10.61x |
+
+Absolute times move by ~10% between runs (GPU clocks, page cache), the ratio
+stays at ~10x. The contest scores the paired ratio, not absolute seconds.
+
+### 3.2 Environment used for the numbers below
+
+One AMD Radeon (gfx1100, 48 GB) development instance, ROCm 7.2.4, hipVS as
+shipped in the contest image, seekdb built from this commit, server started with
+`--parameter cpu_count=24` (the contest quota). The judges run on a W7900D with
+a 24-core quota, so absolute times differ; the ratios are what the scoring uses.
+
+## 4. Results
+
+`nq = 512` single-row queries (the local query pool has 512 vectors; the contest
+uses 4096 of the same kind). Build time includes the first fixed query.
+
+| dataset | path | build | vs baseline | Recall@10 | Recall@100 | QPS top-10 | QPS top-100 | VRAM peak |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| SIFT250K 250Kx128 | **CPU** `lib=vsag` | 80.48 s | 0.56x | – | – | – | – | – |
+| SIFT250K 250Kx128 | **GPU baseline** `lib=cuvs` | 44.88 s | 1.00x | 1.00000 | 1.00000 | 41.6 | 41.2 | 700 MiB |
+| SIFT250K 250Kx128 | **GPU candidate** `lib=cuvs` | **4.53 s** | **9.91x** | 0.99922 | 0.99932 | 42.6 | 41.6 | 846 MiB |
+| HD256 250Kx256 (proxy) | **CPU** `lib=vsag` | 121.65 s | 0.38x | – | – | – | – | – |
+| HD256 250Kx256 (proxy) | **GPU baseline** `lib=cuvs` | 46.62 s | 1.00x | 1.00000 | 0.99996 | 40.1 | 40.2 | 992 MiB |
+| HD256 250Kx256 (proxy) | **GPU candidate** `lib=cuvs` | **24.11 s** | **1.93x** | 1.00000 | 0.99998 | 41.2 | 40.5 | 1042 MiB |
+
+Derived numbers:
+
+* GPU vs CPU build: 1.79x (128-d) and 2.61x (256-d) for the frozen baseline,
+  17.8x and 5.05x for the candidate.
+* Weighted geometric mean of the two build speed-ups (0.4 / 0.6 weights):
+  `9.91^0.4 * 1.93^0.6 = 3.78x`, above the 3.0x full-score line.
+* Query throughput: 1.02x (SIFT250K) and 1.02x (HD256) geometric mean over
+  Top-10/Top-100, i.e. no query regression.
+* VRAM peak: 846/700 = **1.21x** (SIFT250K) and 1042/992 = **1.05x** (HD256),
+  inside the 1.25x envelope.
+* Recall delta vs the paired baseline: -0.0008 / -0.0007 (SIFT250K) and
+  0.0000 / +0.00002 (HD256), inside the 0.005 envelope.
+
+Note that the 256-dim workload is served by the NN-descent fallback: the hidden
+set's cluster structure is unknown, so the dimension gate keeps it on the exact
+baseline algorithm with cheaper build knobs (2x there), while the 128-dim set
+gets the IVF-Flat graph (10x).
+
+## 5. Constraints respected
+
+* only `tools/hipvs_bridge/` is touched (plus this document and `bench/`);
+* hipVS/cuVS is used as a library: `cuvsIvfFlat*`, `cuvsCagraIndexFromArgs`,
+  `cuvsCagraSearch`; no library source is modified and search is still the stock
+  CAGRA search, unmodified parameters;
+* the contest build commands are unchanged and produce
+  `build_release/src/observer/seekdb` and the bridge shared object;
+* FP32 in / FP32 out, no change to the SQL surface, index options or table data;
+* `lib=vsag` keeps working (it is the CPU row above);
+* the GPU is what builds the graph and what serves the queries; the CPU only
+  filters self-hits out of the returned id lists (< 0.1 s).
+
+## 6. Known limitations
+
+* the fast path is only used up to 160 dimensions (see 2.2), so the 256-dim set
+  gets ~2x rather than ~10x;
+* the fast path trades ~0.001 of Recall@100 for the build time; the quality gate
+  exists precisely to keep that inside the contest envelope, but a data set whose
+  sampled graph recall lands just above the gate would be the risky case;
+* the peak VRAM is 1.21x of the baseline on the 128-dim set, i.e. the margin to
+  the 1.25x limit is ~3%;
+* the local query pool has 512 vectors, so the QPS numbers are measured with
+  `nq=512` instead of the contest's 4096.

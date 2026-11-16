@@ -1,0 +1,5 @@
+/minivectordb
+/minivectordb-avx2
+/minivectordb.exe
+/minivectordb-avx2.exe
+*.o

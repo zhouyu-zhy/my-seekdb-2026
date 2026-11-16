@@ -1,0 +1,187 @@
+{
+  "schema": "agent-learning-evidence-v3-unbounded",
+  "material_type": "real_session_record_with_agent_assistance",
+  "synthetic": false,
+  "language": "zh-CN",
+  "provenance": {
+    "session_date": "2026-11-16",
+    "repository": "https://github.com/zhouyu-zhy/my-seekdb-2026",
+    "branch": "2026-competition-round2",
+    "note": "本文件记录同一次开发会话。user_prompts 中的用户消息为原文节选，GitHub token 已脱敏；role=agent 的条目和 experiments 中的命令/输出来自同一次会话的 Agent 执行与工具结果，未虚构学生发言、实验结果或学生理解。"
+  },
+  "user_prompts": [
+    {
+      "id": "u1",
+      "role": "student",
+      "verbatim": true,
+      "redactions": [
+        "四个 GitHub token 替换为 <REDACTED_GITHUB_TOKEN_N>"
+      ],
+      "content": "我当前正参加OCEANBASE大赛，我报名所用的两个代码仓库分别是https://github.com/zhouyu-zhy/my-powercontext-2026.git 和 https://github.com/zhouyu-zhy/my-seekdb-2026.git。然后seekdb仓库的token分别是<REDACTED_GITHUB_TOKEN_1> 和 <REDACTED_GITHUB_TOKEN_2>，powercontext仓库的token分别是<REDACTED_GITHUB_TOKEN_3> 和 <REDACTED_GITHUB_TOKEN_4>。你需要的话自己照着使用。不要push错了，github账户时zhouyu-zhy，powercontext方向用到的时my-powercontext这个仓库。然后我要求你阅读当前文件夹下的加赛文件夹下的prompt文件夹下的题干.txt，了解加赛的要求，然后结合题干以及我的github代码仓库上的文件资料完成加赛的prompt这道题。此外，由于磁盘空间限制，我要求你尽可能将所有的东西放在D盘中进行。"
+    },
+    {
+      "id": "u2",
+      "role": "student",
+      "verbatim": true,
+      "content": "wsl -d Ubuntu-22.04 -- bash -lc \"cd /mnt/d/OBWork && python3 test_veccache.py > /tmp/vc.log 2>&1; cat /tmp/vc.log\"你的这个进程貌似卡死了，你不要进入卡死空转。看看怎么解决，继续吧"
+    },
+    {
+      "id": "u3",
+      "role": "student",
+      "verbatim": true,
+      "content": "继续"
+    }
+  ],
+  "conversations": [
+    {
+      "id": "c1",
+      "role": "student",
+      "verbatim": false,
+      "summary": true,
+      "content": "学生给出任务约束：两个仓库分别是 my-powercontext-2026 和 my-seekdb-2026；seekdb 方向要使用 my-seekdb-2026，并要求不要 push 错仓库；要求阅读加赛题干并完成 prompt 题；由于磁盘空间限制，尽量把工作放在 D 盘。",
+      "source": "/user_prompts/0/content"
+    },
+    {
+      "id": "c2",
+      "role": "agent",
+      "verbatim": false,
+      "summary": true,
+      "content": "Agent 在 D:\\OBWork 下解压题包，读取 2026-competition-round2 题包中的 STDIO_PROTOCOL.md、协议检查器和公开 mysqltest 用例，确认输入是 stdin/stdout 上的 JSON Lines 请求，输出必须包含 columns/rows 或 affected_rows，错误用 error.code 表示。"
+    },
+    {
+      "id": "c3",
+      "role": "agent",
+      "verbatim": false,
+      "summary": true,
+      "content": "Agent 选择从零实现 C++17 单进程数据库：自己写 SQL 词法/递归下降解析、行式存储、事务 overlay、带 CRC 的事务块日志、checkpoint 和精确 L2 TopK；不使用 SQLite/RocksDB/Faiss 等现成引擎。"
+    },
+    {
+      "id": "c4",
+      "role": "student",
+      "verbatim": true,
+      "content": "wsl -d Ubuntu-22.04 -- bash -lc \"cd /mnt/d/OBWork && python3 test_veccache.py > /tmp/vc.log 2>&1; cat /tmp/vc.log\"你的这个进程貌似卡死了，你不要进入卡死空转。看看怎么解决，继续吧"
+    },
+    {
+      "id": "c5",
+      "role": "agent",
+      "verbatim": false,
+      "summary": true,
+      "content": "Agent 先检查是否真的卡死：之前把输出重定向到 /tmp/vc.log 后日志为空，并且 pkill -f test_veccache.py 会匹配到包装它的 bash 命令本身；同时 PowerShell 会把双引号里的 $? 展开成 True。改用单引号包裹、加 timeout 后，同一个测试脚本完整跑完，说明数据库没有卡死。"
+    },
+    {
+      "id": "c6",
+      "role": "agent",
+      "verbatim": false,
+      "summary": true,
+      "content": "重跑结果显示：更新向量后 TopK 立即反映新距离，DELETE 后记录消失，BEGIN/UPDATE/ROLLBACK 后恢复旧距离；根因是测试包装命令和 shell 展开，不是 vecCache 失效或事务可见性错误。"
+    },
+    {
+      "id": "c7",
+      "role": "student",
+      "verbatim": true,
+      "content": "继续"
+    },
+    {
+      "id": "c8",
+      "role": "agent",
+      "verbatim": false,
+      "summary": true,
+      "content": "Agent 继续完成边界处理、连续恢复、checkpoint、Docker 构建、只读根文件系统和 公开用例回归；最终整理 README、Dockerfile 与本材料。"
+    }
+  ],
+  "experiments": [
+    {
+      "id": "e0-hang-check",
+      "title": "复现“卡死”并用 timeout 重跑向量缓存更新/回滚测试",
+      "executed_by": "agent",
+      "command": "timeout 10s python3 -u test_veccache.py",
+      "output": "{\"type\":\"ready\"}\nCREATE TABLE t (id BIGINT PRIMARY KEY, e VECTOR(2)); => {'id': 1, 'ok': True}\nINSERT INTO t VALUES (1,'[0,0]'),(2,'[1,0]'),(3,'[2,0]'); => {'id': 2, 'ok': True, 'affected_rows': 3}\nSELECT id, L2_DISTANCE(e,'[0,0]') AS d FROM t ORDER BY d LIMIT 3; => {'id': 3, 'ok': True, 'columns': ['id', 'd'], 'rows': [[1, 0.0], [2, 1.0], [3, 2.0]]}\nUPDATE t SET e='[9,0]' WHERE id=1; => {'id': 4, 'ok': True, 'affected_rows': 1}\nSELECT id, L2_DISTANCE(e,'[0,0]') AS d FROM t ORDER BY d LIMIT 3; => {'id': 5, 'ok': True, 'columns': ['id', 'd'], 'rows': [[2, 1.0], [3, 2.0], [1, 9.0]]}\nDELETE FROM t WHERE id=2; => {'id': 6, 'ok': True, 'affected_rows': 1}\nSELECT id, L2_DISTANCE(e,'[0,0]') AS d FROM t ORDER BY d LIMIT 3; => {'id': 7, 'ok': True, 'columns': ['id', 'd'], 'rows': [[3, 2.0], [1, 9.0]]}\nBEGIN; => {'id': 8, 'ok': True}\nUPDATE t SET e='[0,0]' WHERE id=1; => {'id': 9, 'ok': True, 'affected_rows': 1}\nSELECT id, L2_DISTANCE(e,'[0,0]') AS d FROM t ORDER BY d LIMIT 3; => {'id': 10, 'ok': True, 'columns': ['id', 'd'], 'rows': [[1, 0.0], [3, 2.0]]}\nROLLBACK; => {'id': 11, 'ok': True}\nSELECT id, L2_DISTANCE(e,'[0,0]') AS d FROM t ORDER BY d LIMIT 3; => {'id': 12, 'ok': True, 'columns': ['id', 'd'], 'rows': [[3, 2.0], [1, 9.0]]}\nrc=0\n",
+      "interpretation": "输出在 10 秒内完整结束（rc=0），更新后距离为 9.0、删除后只剩 3 和 1、事务内更新后距离为 0.0、回滚后恢复 9.0。说明数据库没有卡死；之前的空日志来自重定向/包装命令，pkill -f 还会误杀包装 shell。"
+    },
+    {
+      "id": "e1-public",
+      "title": "官方公开用例回归",
+      "executed_by": "agent",
+      "command": "bash run_check.sh",
+      "output": "handshake: PASS\n\nsql_crud: PASS\nsql_comparisons: PASS\nsql_ordering: PASS\nsql_empty: PASS\nsql_primary_key: PASS\nsql_unicode: PASS\nsql_bigint: PASS\nsql_unsupported: PASS\nstorage_restart: PASS\nvector_euclidean: PASS\ntransaction_commit: PASS\ntransaction_rollback: PASS\nstorage_mutations: PASS\nstorage_multiple_tables: PASS\nvector_ties_and_filter: PASS\nvector_float32: PASS\nvector_index_maintenance: PASS\ntransaction_failed_insert: PASS\ntransaction_autocommit_atomic: PASS\ntransaction_shutdown_rollback: PASS",
+      "interpretation": "握手 + 20 个公开用例全部 PASS。"
+    },
+    {
+      "id": "e2-bench",
+      "title": "本地 10k x 128 维批量写入与 1000 次 TopK",
+      "executed_by": "agent",
+      "command": "MVDB_BIN=.../minivectordb-avx2 python3 mvdb_tests.py bench",
+      "output": "startup 0.008 write 0.734 query1000 0.397 (unfiltered 0.273 filtered 0.124) VmHWM:\t   17792 kB\nshutdown 0.004",
+      "interpretation": "本机 WSL2/AVX2+FMA 上的开发自测，不是评测机成绩；写入包含逐批持久化，查询为 exact TopK，峰值 RSS 约 17.8MB。"
+    },
+    {
+      "id": "e3-crash",
+      "title": "提交块写入中 SIGKILL 与已确认提交后重启",
+      "executed_by": "agent",
+      "command": "python3 mvdb_tests3.py crashcommit; python3 mvdb_tests4.py full; python3 mvdb_tests4.py recovery",
+      "output": "rows after torn commit: 1\ncrashcommit ok\nfull commit ok\ninterrupted recovery ok",
+      "interpretation": "撕裂块只保留此前已提交的 1 行，没有部分批次；完整提交在 kill -9 后仍可见；启动恢复过程中连续 kill 后再次启动仍能恢复。"
+    },
+    {
+      "id": "e4-checkpoint",
+      "title": "反复更新触发 checkpoint 及流式更新/删除",
+      "executed_by": "agent",
+      "command": "python3 mvdb_tests2.py cp; python3 mvdb_tests3.py stream",
+      "output": "files after updates: ['rows_2.dat']\ncheckpoint ok\nfeatures ok\nstream ok",
+      "interpretation": "活动文件从 rows_0.dat 切到 rows_2.dat，重启后更新、删除、插入和索引元数据正确；20k 行数据在 1MB 缓存预算下走流式路径。"
+    },
+    {
+      "id": "e5-docker",
+      "title": "多阶段 Docker 构建与只读根文件系统启动",
+      "executed_by": "agent",
+      "command": "docker build -t minivectordb:test .; docker run --rm -i --read-only -v /tmp/dockdata2:/data ...",
+      "output": "#16 exporting to image ... DONE 1.0s\n{\"type\":\"ready\"}\n{\"id\":1,\"ok\":true}\n{\"id\":2,\"ok\":true,\"affected_rows\":1}\n{\"id\":3,\"ok\":true,\"columns\":[\"id\",\"d\"],\"rows\":[[1,1.0]]}\n{\"id\":4,\"ok\":true}\nread-only run: ok; /data contains only catalog.dat and rows_0.dat",
+      "interpretation": "构建阶段编译 generic 与 AVX2 两个二进制；运行时入口脚本按 CPU 能力选择；只读根文件系统下仍能 ready、建表并在 /data 写出 catalog.dat 与 rows_0.dat。"
+    }
+  ],
+  "student_evidence_units": [
+    {
+      "id": "unit-hang-check",
+      "dimension": "独立验证与质疑",
+      "score": 1.0,
+      "student_evidence": {
+        "pointer": "/user_prompts/1/content",
+        "quote": "你的这个进程貌似卡死了，你不要进入卡死空转。看看怎么解决，继续吧"
+      },
+      "result_evidence": {
+        "pointer": "/experiments/0/output",
+        "quote": "SELECT id, L2_DISTANCE(e,'[0,0]') AS d FROM t ORDER BY d LIMIT 3; => {'id': 5, 'ok': True, 'columns': ['id', 'd'], 'rows': [[2, 1.0], [3, 2.0], [1, 9.0]]}"
+      },
+      "reason": "学生独立观察到命令长时间无输出，明确要求停止空转并定位原因；随后用 timeout 重跑，输出证明数据库在更新后返回正确新距离、没有卡死。根因是 PowerShell 展开 $? 以及 pkill -f 误杀包装 shell，而非数据库逻辑。该实例止于定位和验证，学生没有进一步解释或修正方案，因此取 1 分档而不是 1.5 分档。",
+      "provenance": "user_prompts[1] + experiments[0]"
+    },
+    {
+      "id": "unit-repo-constraint",
+      "dimension": "问题理解与自主拆解",
+      "score": 0.5,
+      "student_evidence": {
+        "pointer": "/user_prompts/0/content",
+        "quote": "不要push错了，github账户时zhouyu-zhy，powercontext方向用到的时my-powercontext这个仓库。"
+      },
+      "result_evidence": {},
+      "reason": "学生主动区分两个仓库方向，并指出不能推到错误仓库，属于对提交约束和风险的识别；但没有给出技术拆解、验证方案或实际结果，按仅有规划/约束识别的 0.5 分档记录。",
+      "provenance": "user_prompts[0]"
+    }
+  ],
+  "retrospective": {
+    "author": "agent",
+    "note": "以下为 Agent 的实现复盘，不作为学生理解证据；学生尚未提交自己的复盘。",
+    "content": "实现上把正确性放在性能之前：每个提交先编码完整事务块并 fdatasync，再应用内存并回复；恢复时逐块校验 magic/长度/CRC，遇到撕裂块立即截断，因此提交请求未确认时只可能完整生效或完整不生效。checkpoint 先写新文件并 fsync，再原子替换 catalog，最后删除旧文件，避免恢复时选择半写文件。查询侧对已缓存表额外建连续向量数组，无过滤 TopK 走连续扫描；有过滤时先谓词后距离；未缓存表只保留 pk 到文件偏移的引用并流式扫描，使数据量可以大于内存预算。",
+    "tradeoffs": [
+      "ANN：选择 exact fallback 换取 Recall@10 = 1.0 和索引维护零不一致；代价是查询仍为 O(N)，没有拿到 IVF/HNSW 的亚线性收益。对于固定 10k 规模这是有意的取舍。",
+      "持久化：每个提交一个块并 fdatasync，换取崩溃安全；代价是每批写入一次同步，比批量合并日志更慢。",
+      "内存：缓存行实体 + 连续向量数组，查询快但内存约为行数据的 2 倍；超过预算时整体退化为流式扫描，保证不 OOM。",
+      "构建：同时产出 generic 与 AVX2+FMA 二进制，入口按 /proc/cpuinfo 选择，兼顾评测机性能和旧 CPU 兼容性。"
+    ]
+  },
+  "limitations": [
+    "材料限制：学生只提供了初始任务、仓库/令牌约束、卡死观察和“继续”，没有参与技术方案选择、实验设计或结果解释；本文件不把 Agent 的规划、代码和解释计为学生证据。",
+    "实现限制：不支持 NULL、JOIN、聚合、子查询、OR、ALTER、DROP、外键、主键更新和嵌套事务；大事务的 overlay 仍在内存中构建。",
+    "验证限制：性能数字来自开发机 WSL2，不是评测机；没有实现真正的 IVF/HNSW，ann 模式返回精确结果。"
+  ]
+}

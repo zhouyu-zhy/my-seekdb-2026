@@ -66,8 +66,9 @@ lifetime. On top of that the IVF-Flat index holds its own copy of the data while
 the kNN is generated, so the naive version peaks at two dataset copies. The
 bridge therefore frees its own copy right after `cuvsIvfFlatBuild` and re-uploads
 it only once the IVF index is destroyed, just before `cuvsCagraIndexFromArgs`.
-That keeps the high-water mark at "one dataset copy + IVF lists": the 256-dim
-peak lands at 0.92x of the baseline (FP32 kept everywhere, no precision change).
+That keeps the high-water mark at "one dataset copy + IVF lists": the 128-dim
+peak lands at 1.21x of the baseline and the 256-dim fallback at 0.83x (FP32 kept
+everywhere, no precision change).
 
 ## 3. Reproducible test method
 
@@ -175,8 +176,11 @@ gets the IVF-Flat graph (10x).
 
 ## 6. Known limitations
 
-* the fast path is only used up to 160 dimensions (see 2.2), so the 256-dim set
-  gets ~2x rather than ~10x;
+* the fast path is only used up to 160 dimensions (see 2.2): on a 256-dim proxy
+  that is about as hard as the hidden set, the IVF candidate graph costs 0.010 of
+  Recall@100 against the baseline graph, which is outside the 0.005 envelope, so
+  wide vectors keep the NN-descent graph (still ~2x faster than the baseline via
+  cheaper build knobs);
 * the fast path trades ~0.001 of Recall@100 for the build time; the quality gate
   exists precisely to keep that inside the contest envelope, but a data set whose
   sampled graph recall lands just above the gate would be the risky case;

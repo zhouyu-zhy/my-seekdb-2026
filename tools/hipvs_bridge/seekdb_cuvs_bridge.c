@@ -24,7 +24,7 @@
  * the index over the buffers we hand it). Above this dimension that copy is
  * large enough to push the VRAM peak past the baseline envelope, so wide
  * vectors stay on the NN-descent path. */
-#define SK_IVF_MAX_DIM 512
+#define SK_IVF_MAX_DIM 160
 /* Sampled quality gate for the fast path (see sk_build_ivf_graph). */
 #define SK_QCHECK_MIN 0.94
 #define SK_SAMPLE 256

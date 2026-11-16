@@ -20,7 +20,7 @@
 #define SK_GRAPH_DEGREE 128
 /* NN-descent fallback knobs: 128 intermediate degree x 50 iterations keeps the
  * graph quality at baseline level while roughly halving the build time. */
-#define SK_NN_ITER 48
+#define SK_NN_ITER 47
 #define SK_IVF_MIN_N 4096
 /* Use bounded staging when the existing full-matrix upload would be large. */
 #define SK_IVF_DIRECT_MAX_DIM 160

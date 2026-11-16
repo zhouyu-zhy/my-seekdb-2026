@@ -7,7 +7,7 @@
     "session_date": "2026-11-16",
     "repository": "https://github.com/zhouyu-zhy/my-seekdb-2026",
     "branch": "2026-competition-round2",
-    "note": "本文件记录同一次开发会话。user_prompts 中的用户消息为原文节选，GitHub token 已脱敏；role=agent 的条目和 experiments 中的命令/输出来自同一次会话的 Agent 执行与工具结果，未虚构学生发言、实验结果或学生理解。retrospective 由助手根据真实过程整理，学生于2026-11-16明确确认后作为本人复盘提交。"
+    "note": "本文件记录同一次开发会话。user_prompts 中的用户消息为原文节选，GitHub token 已脱敏；role=agent 的条目和 experiments 中的命令/输出来自同一次会话的 Agent 执行与工具结果，未虚构学生发言、实验结果或学生理解。retrospective 由助手根据真实过程整理，学生于2026-11-16明确确认后作为本人复盘提交；Q01到Q05的学生预测来自学生自己的A.md，实际输出由Agent运行后写回Q.md。"
   },
   "user_prompts": [
     {
@@ -149,6 +149,76 @@
       "command": "docker build -t minivectordb:test .; docker run --rm -i --read-only -v /tmp/dockdata2:/data minivectordb:test",
       "output": "#16 exporting to image DONE\n{\"type\":\"ready\"}\n{\"id\":1,\"ok\":true}\n{\"id\":2,\"ok\":true,\"affected_rows\":1}\n{\"id\":3,\"ok\":true,\"columns\":[\"id\",\"d\"],\"rows\":[[1,1.0]]}\n{\"id\":4,\"ok\":true}\nread-only run: ok; /data contains only catalog.dat and rows_0.dat",
       "interpretation": "构建阶段编译 generic 与 AVX2 两个二进制；运行时入口脚本按 CPU 能力选择；只读根文件系统下仍能 ready、建表并在 /data 写出 catalog.dat 与 rows_0.dat。"
+    },
+    {
+      "id": "e6-q01",
+      "title": "Q01 实验结果",
+      "question": "如果多个向量到查询点的距离完全相同，TopK 返回顺序由什么决定，为什么需要这个规则？",
+      "student_prediction": {
+        "source": "A.md Q01",
+        "content": "预测：多个向量的 L2 距离完全相同时，TopK 应按主键升序返回；如果并列记录恰好跨越 LIMIT 边界，也应优先选择主键较小的记录。\n理由：距离本身不能区分这些记录，仅依赖扫描顺序、索引顺序或并行执行顺序会导致结果不稳定。增加主键升序作为第二排序键后，排序关系成为确定的全序，既能保证多次查询结果一致，也能让精确检索和召回率计算使用统一、可复现的真值。"
+      },
+      "executed_by": "agent",
+      "command": "python3 exp_q01_q05.py q01",
+      "output": "Q01_LIMIT3 {\"id\": 3, \"ok\": true, \"columns\": [\"id\", \"d\"], \"rows\": [[2, 1.0], [5, 1.0], [7, 1.0]]}\nQ01_LIMIT4 {\"id\": 4, \"ok\": true, \"columns\": [\"id\", \"d\"], \"rows\": [[2, 1.0], [5, 1.0], [7, 1.0], [10, 1.0]]}",
+      "follow_up": "为什么 LIMIT 为 3 时不能返回主键 10 而排除主键 2，主键升序在这里解决了什么问题？",
+      "student_result_explanation": ""
+    },
+    {
+      "id": "e6-q02",
+      "title": "Q02 实验结果",
+      "question": "带 WHERE 的 TopK 查询应该先过滤再算距离，还是先全表取 TopK 再过滤？如果顺序反了会错在哪里？",
+      "student_prediction": {
+        "source": "A.md Q02",
+        "content": "预测：带 WHERE 的 TopK 查询必须先过滤，再只在满足条件的记录上计算距离并选取前 K 条；过滤后不足 K 条时，应返回全部符合条件的记录。\n理由：题干规定 TopK 的候选集合是满足 WHERE 条件的记录，而不是全表。若先在全表取 K 条再过滤，符合条件但不在全表前 K 条中的记录会被漏掉，最终还可能错误地返回少于实际符合条件数量的结果；先过滤也可以避免为不满足条件的记录计算距离。"
+      },
+      "executed_by": "agent",
+      "command": "python3 exp_q01_q05.py q02",
+      "output": "Q02_FILTERED_TOPK {\"id\": 3, \"ok\": true, \"columns\": [\"id\", \"d\"], \"rows\": [[3, 10.0], [4, 11.0]]}\nQ02_FILTERED_FEWER {\"id\": 4, \"ok\": true, \"columns\": [\"id\", \"d\"], \"rows\": [[3, 10.0], [4, 11.0]]}\nQ02_ALL_TABLE_TOP2 {\"id\": 5, \"ok\": true, \"columns\": [\"id\", \"d\"], \"rows\": [[1, 0.0], [2, 0.10000000149011612]]}",
+      "follow_up": "如果过滤后只有 1 条而 LIMIT 为 2，应该返回几条，为什么不能从全表补足到 2 条？",
+      "student_result_explanation": ""
+    },
+    {
+      "id": "e6-q03",
+      "title": "Q03 实验结果",
+      "question": "进程被 SIGKILL 后，已确认提交的事务为什么应该还在，未提交事务为什么不应该留下半批数据？",
+      "student_prediction": {
+        "source": "A.md Q03",
+        "content": "预测：已返回 COMMIT 成功的事务在 SIGKILL 后必须完整保留；未提交事务在重启后不应留下任何修改。已经发出提交请求但未收到成功响应的事务，可以完整生效或完整不生效，但不能只恢复其中一部分。\n理由：已确认提交代表数据库已经向客户端作出持久化承诺，因此应在成功响应前完成提交记录落盘和必要的 fsync。恢复时只接受具有完整长度、正确 CRC 和有效提交标记的事务块，未提交或写到一半的块不能按独立行操作重放，这样才能避免半批数据破坏事务原子性。"
+      },
+      "executed_by": "agent",
+      "command": "python3 exp_q01_q05.py q03",
+      "output": "Q03_AFTER_COMMITTED_KILL {\"id\": 1, \"ok\": true, \"columns\": [\"id\"], \"rows\": [[1]]}\nQ03_AFTER_UNCOMMITTED_KILL {\"id\": 1, \"ok\": true, \"columns\": [\"id\"], \"rows\": [[1]]}\nQ03_TORN_COMMIT_KILLED True ROWS 1 FIRST [[1]] LAST [[1]]",
+      "follow_up": "恢复时如何判断一个块是完整的，为什么不能按行重放一个只写了一半的事务块？",
+      "student_result_explanation": ""
+    },
+    {
+      "id": "e6-q04",
+      "title": "Q04 实验结果",
+      "question": "checkpoint 正在写新文件时崩溃，重启应该选旧文件还是新文件，为什么不会选到半写文件？",
+      "student_prediction": {
+        "source": "A.md Q04",
+        "content": "预测：如果 checkpoint 在写新文件时崩溃，重启应继续使用旧的完整 checkpoint；只有新文件完整写入并持久化、且活动版本完成原子切换后，恢复才应选择新文件。\n理由：新文件在写入途中既不是完整的活动版本，也无法保证校验和及元数据有效，因此不能仅凭文件名较新或修改时间较新就选用它。采用临时文件、完整性与长度校验、fsync 和原子重命名或活动指针切换，可以把新版本设为“要么整体可见、要么完全不可见”，半程文件随后可被忽略或清理。"
+      },
+      "executed_by": "agent",
+      "command": "python3 exp_q01_q05.py q04",
+      "output": "Q04_HALF_NEW_FILE_IGNORED {\"id\": 1, \"ok\": true, \"columns\": [\"id\"], \"rows\": [[1], [2]]}\nQ04_FILES_AFTER_RESTART ['catalog.dat', 'rows_0.dat']\nQ04_CHECKPOINT_FILES ['rows_2.dat']\nQ04_AFTER_CHECKPOINT_RESTART {\"id\": 1, \"ok\": true, \"columns\": [\"id\", \"cat\"], \"rows\": [[15000, \"u3\"]]}",
+      "follow_up": "如果 rows_99.dat 文件名比 rows_0.dat 新、修改时间也更晚，为什么仍然不能选它？",
+      "student_result_explanation": ""
+    },
+    {
+      "id": "e6-q05",
+      "title": "Q05 实验结果",
+      "question": "向量按 float32 存储、距离用 double 累加，如果全部用 float 计算会有什么风险？为什么查询向量也要先转成 float32？",
+      "student_prediction": {
+        "source": "A.md Q05",
+        "content": "预测：如果距离累加也全部使用 float，较大的平方和更容易产生累计舍入误差，中间结果还可能提前溢出为 Infinity，进而改变距离排序或 TopK 边界。使用 double 累加能降低这些风险，但存入向量的每个分量仍应是 float32。\n理由：多个 float32 分量分别平方并累加时，单次运算和总和的精度可能高于 float 的表示能力，double 能保留更多有效位并提供更大的中间值范围。查询向量也要先转换成 float32，是为了让查询与已存储向量经过相同的量化规则，避免查询侧保留 double 精度而得到另一套距离结果；NaN、Infinity 和转换溢出则应在接收时拒绝。"
+      },
+      "executed_by": "agent",
+      "command": "python3 exp_q01_q05.py q05",
+      "output": "Q05_LARGE_DISTANCE {\"id\": 3, \"ok\": true, \"columns\": [\"id\", \"d\"], \"rows\": [[1, 2.0000000400817547e+20]]}\nQ05_COMPONENT {\"id\": 4, \"ok\": true, \"columns\": [\"id\", \"d\"], \"rows\": [[2, 16777216.00000003]]}\nQ05_OVERFLOW_REJECT {\"id\": 5, \"ok\": false, \"error\": {\"code\": \"invalid_vector\", \"message\": \"vector component is not a finite float32\"}}",
+      "follow_up": "为什么查询向量也要先转成 float32，而不是保留 double 参与距离计算？",
+      "student_result_explanation": ""
     }
   ],
   "student_evidence_units": [
@@ -197,6 +267,81 @@
       },
       "reason": "学生在确认后的复盘中结合本地自测结果解释了精确扫描、提交同步、缓存和checkpoint的取舍，并给出下一步对照实验计划；但实验由Agent执行，学生没有独立复测，因此取1分档而不是1.5分档。",
       "provenance": "retrospective[0] + experiments[2] + user_prompts[3]"
+    },
+    {
+      "id": "unit-q01-tie",
+      "dimension": "技术理解与迁移",
+      "score": 1.0,
+      "student_evidence": {
+        "pointer": "/experiments/6/student_prediction/content",
+        "quote": "多个向量的 L2 距离完全相同时，TopK 应按主键升序返回；如果并列记录恰好跨越 LIMIT 边界，也应优先选择主键较小的记录。"
+      },
+      "result_evidence": {
+        "pointer": "/experiments/6/output",
+        "quote": "Q01_LIMIT3 {\"id\": 3, \"ok\": true, \"columns\": [\"id\", \"d\"], \"rows\": [[2, 1.0], [5, 1.0], [7, 1.0]]}"
+      },
+      "reason": "学生先给出并列规则和全序理由，实际输出 LIMIT3 为 2、5、7，LIMIT4 为 2、5、7、10，结果与预测一致；尚未做结果后修正和复测，因此按 1 分档。",
+      "provenance": "A.md Q01 + Q.md Q01 结果"
+    },
+    {
+      "id": "unit-q02-filter",
+      "dimension": "技术理解与迁移",
+      "score": 1.0,
+      "student_evidence": {
+        "pointer": "/experiments/7/student_prediction/content",
+        "quote": "带 WHERE 的 TopK 查询必须先过滤，再只在满足条件的记录上计算距离并选取前 K 条；过滤后不足 K 条时，应返回全部符合条件的记录。"
+      },
+      "result_evidence": {
+        "pointer": "/experiments/7/output",
+        "quote": "Q02_FILTERED_TOPK {\"id\": 3, \"ok\": true, \"columns\": [\"id\", \"d\"], \"rows\": [[3, 10.0], [4, 11.0]]}"
+      },
+      "reason": "学生预测先过滤，实际正确结果为 target 的 3 和 4，全表 Top2 为 other 的 1 和 2；如果先全表取 TopK 再过滤会得到 0 条，结果与预测一致，按 1 分档。",
+      "provenance": "A.md Q02 + Q.md Q02 结果"
+    },
+    {
+      "id": "unit-q03-crash",
+      "dimension": "独立验证与质疑",
+      "score": 1.0,
+      "student_evidence": {
+        "pointer": "/experiments/8/student_prediction/content",
+        "quote": "已返回 COMMIT 成功的事务在 SIGKILL 后必须完整保留；未提交事务在重启后不应留下任何修改。"
+      },
+      "result_evidence": {
+        "pointer": "/experiments/8/output",
+        "quote": "Q03_AFTER_UNCOMMITTED_KILL {\"id\": 1, \"ok\": true, \"columns\": [\"id\"], \"rows\": [[1]]}"
+      },
+      "reason": "学生预测已提交保留、未提交不保留；实际强杀后已提交的 1 在，未提交的 2 和 3 不在，撕裂块只保留 1，结果与预测一致，按 1 分档。",
+      "provenance": "A.md Q03 + Q.md Q03 结果"
+    },
+    {
+      "id": "unit-q04-checkpoint",
+      "dimension": "技术理解与迁移",
+      "score": 1.0,
+      "student_evidence": {
+        "pointer": "/experiments/9/student_prediction/content",
+        "quote": "如果 checkpoint 在写新文件时崩溃，重启应继续使用旧的完整 checkpoint；只有新文件完整写入并持久化、且活动版本完成原子切换后，恢复才应选择新文件。"
+      },
+      "result_evidence": {
+        "pointer": "/experiments/9/output",
+        "quote": "Q04_HALF_NEW_FILE_IGNORED {\"id\": 1, \"ok\": true, \"columns\": [\"id\"], \"rows\": [[1], [2]]}"
+      },
+      "reason": "学生预测半写新文件不能选用；实际构造半写 rows_99.dat 后重启仍读取 rows_0.dat，文件 1 和 2 都在，半写文件被清理，结果与预测一致，按 1 分档。",
+      "provenance": "A.md Q04 + Q.md Q04 结果"
+    },
+    {
+      "id": "unit-q05-float",
+      "dimension": "技术理解与迁移",
+      "score": 1.0,
+      "student_evidence": {
+        "pointer": "/experiments/10/student_prediction/content",
+        "quote": "如果距离累加也全部使用 float，较大的平方和更容易产生累计舍入误差，中间结果还可能提前溢出为 Infinity，进而改变距离排序或 TopK 边界。"
+      },
+      "result_evidence": {
+        "pointer": "/experiments/10/output",
+        "quote": "Q05_LARGE_DISTANCE {\"id\": 3, \"ok\": true, \"columns\": [\"id\", \"d\"], \"rows\": [[1, 2.0000000400817547e+20]]}"
+      },
+      "reason": "学生预测 float 累加会溢出或损失精度；实际 double 得到 2.0000000400817547e+20，float 平方和会溢出，1e39 输入被拒绝，结果与预测一致，按 1 分档。",
+      "provenance": "A.md Q05 + Q.md Q05 结果"
     }
   ],
   "retrospective": {
@@ -210,6 +355,12 @@
   "limitations": [
     "材料限制：学生提供了初始任务、仓库/令牌约束、卡死观察、继续指令，并在提交前确认了第一人称复盘；但学生没有独立设计实验或亲自复测，复盘中的技术细节来自 Agent 的实现和测试记录，本文件不把 Agent 的代码和解释直接计为学生理解。",
     "实现限制：不支持 NULL、JOIN、聚合、子查询、OR、ALTER、DROP、外键、主键更新和嵌套事务；大事务的 overlay 仍在内存中构建。",
-    "验证限制：性能数字来自开发机 WSL2，不是评测机；没有实现真正的 IVF/HNSW，ann 模式返回精确结果。"
-  ]
+    "验证限制：性能数字来自开发机 WSL2，不是评测机；没有实现真正的 IVF/HNSW，ann 模式返回精确结果。",
+    "第一批 Q01 到 Q05 的学生预测来自 A.md，实际输出由 Agent 运行；结果后解释仍在等待学生补充，因此这五个实例目前按 1 分档记录，尚未升级到 1.5 分档。"
+  ],
+  "lab_protocol": {
+    "questions_file": "Q.md",
+    "answers_file": "A.md",
+    "note": "学生在A.md先写预测，Agent再运行实验并把实际输出写回Q.md；第一批Q01到Q05的结果后解释等待学生补充。"
+  }
 }

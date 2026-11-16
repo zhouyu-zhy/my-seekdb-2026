@@ -57,13 +57,17 @@ to NN-descent with `intermediate_graph_degree=128`, `nn_descent_niter=50`.
 | SIFT 250K x 128 | 0.952 | fast path |
 | uniform random 250K x 256 | 0.367 | NN-descent fallback |
 
-### 2.2 Dimension gate
+### 2.2 VRAM: one dataset copy instead of two
 
 `cuvsCagraIndexFromArgs` does not copy its inputs (verified with
 `cuvsCagraIndexGetGraph`/`GetDataset`: the index returns our pointers), so the
-bridge has to keep one device copy of graph + dataset alive for the index
-lifetime. Above `SK_IVF_MAX_DIM=160` that copy is large enough to push the VRAM
-peak out of the baseline envelope, so wide vectors go straight to NN-descent.
+bridge must keep one device copy of graph + dataset alive for the index
+lifetime. On top of that the IVF-Flat index holds its own copy of the data while
+the kNN is generated, so the naive version peaks at two dataset copies. The
+bridge therefore frees its own copy right after `cuvsIvfFlatBuild` and re-uploads
+it only once the IVF index is destroyed, just before `cuvsCagraIndexFromArgs`.
+That keeps the high-water mark at "one dataset copy + IVF lists": the 256-dim
+peak lands at 0.92x of the baseline (FP32 kept everywhere, no precision change).
 
 ## 3. Reproducible test method
 

@@ -1,0 +1,316 @@
+{
+  "schema": "agent-learning-evidence-v3-unbounded",
+  "synthetic": false,
+  "material_notes": {
+    "language": "zh-CN",
+    "student": "选手本人（GitHub 账号 zhouyu-zhy）",
+    "agent": "IDE 内的 AI 编码 Agent",
+    "date": "2026-11-17",
+    "redaction": "两个仓库的 GitHub 访问令牌已替换为 <REDACTED>，其余文本保持原样，包括学生原话中的错别字。",
+    "honesty": "本文件只记录真实发生的交互与真实命令输出。学生侧发言只有 U1、U2、U3 三条；实现、实验与文档由 Agent 完成，每条实例都写明实际作者，没有把 Agent 的推断改写成学生的判断。",
+    "coverage_gap": "按 3.4.2，本材料目前只有 U1 一条具备内容的规划型证据；技术理解、独立验证、实验闭环与反思四个维度缺少学生本人的表述，未用 Agent 的输出冒充。"
+  },
+  "submission": {
+    "task": "加赛 Agent prompt 评价（MiniVectorDB）",
+    "repository": "https://github.com/zhouyu-zhy/my-seekdb-2026",
+    "branch": "new",
+    "base": "官方 2026-competition-round2 题包（mysqltest / protocol_check / STDIO_PROTOCOL.md 原样保留）",
+    "implementation": "Python 3.12 + 可选 numpy；追加式分帧日志 + commit.log 提交点",
+    "artifacts": [
+      "Dockerfile",
+      "src/minivectordb/{__main__,server,sqlparser,engine,storage,values,errors}.py",
+      "README.md（运行说明）",
+      "DESIGN.md（设计、验证记录、已知限制）",
+      "tools/{local_check,crash_check,spec_check,bench}.py",
+      "agent/conversation.json"
+    ]
+  },
+  "user_prompts": [
+    {
+      "id": "U1",
+      "author": "student",
+      "content": "阅读当前问价夹下的两个.txt文件，这是OCEANBASE比赛的加赛题干和分数规则要求。然后我先给你说明，我报名所用的两个代码仓库分别是 https://github.com/zhouyu-zhy/my-powercontext-2026.git 和 https://github.com/zhouyu-zhy/my-seekdb-2026.git。两个仓库的访问令牌为 <REDACTED>。你需要的话自己照着使用。不要push错了，github账户是 zhouyu-zhy，powercontext 方向用的是 my-powercontext 这个仓库。现在，阅读txt文件和github代码仓库上的文件，给我做一下prompt这道题。但是我需要跟你说明，当前这个my-seekdb-2026这个仓库里的有些分支里面可能已经有prompt这道题的解答了，我要求你不要阅读他们，因为他们全是错的，全是零分，我要求你不能看他们，我不需要你纠正他们为什么错了。我要求你新建一个名为new的分支，在这个里面从零开始给我做prompt这道题，如果需要使用磁盘的话就用D盘，但是不要读D盘里面现有的关于prompt的解题，因为也是错的。还有就是一定要满足题干要求，不要乱删乱改人家要求的东西。",
+      "note": "开赛说明。学生自行划定了工作边界：先读题干与计分规则、只用指定仓库与分支、不读已有（被判定为错误）的实现、从零新建分支、不改动组织方材料。"
+    },
+    {
+      "id": "U2",
+      "author": "student",
+      "content": "继续",
+      "note": "推进指令。按 3.4.2 的说明，这类发言不单独构成证据实例。"
+    },
+    {
+      "id": "U3",
+      "author": "student",
+      "content": "请继续",
+      "note": "推进指令，同上。"
+    }
+  ],
+  "conversations": [
+    {
+      "id": "C1",
+      "title": "先把题意与材料边界分开",
+      "turns": [
+        {
+          "role": "student",
+          "ref": "/user_prompts/0",
+          "content": "我要求你新建一个名为new的分支，在这个里面从零开始给我做prompt这道题"
+        },
+        {
+          "role": "agent",
+          "content": "先确认加赛的计分结构：加赛总分 700 = 原有赛题 620 + 性能排名 40 + Agent prompt 排名 40；两类加赛分的前置条件都是加赛题包的 MySQL case 全部通过，否则两项都为 0。因此这次不能只写 conversation.json，必须先把 MiniVectorDB 做到公开用例全过。我把工作拆成四段：读题包并确认通信协议；实现引擎；用官方驱动与自建脚本验证；最后整理 prompt 材料。"
+        },
+        {
+          "role": "tool",
+          "content": "官方 2026-competition-round2 分支内容：STDIO_PROTOCOL.md、mysqltest/{manifest.json,cases/*.test,cases/*.result}（20 个公开用例、95 条 SQL）、protocol_check/{run.py,_transport.py,_assertions.py,config.json}；根目录的 Dockerfile 与 conversation.json 是 0 字节占位文件，需要选手自己填。"
+        }
+      ]
+    },
+    {
+      "id": "C2",
+      "title": "协议不是纯 SQL：JSONL、ready 握手、shutdown 退出码",
+      "turns": [
+        {
+          "role": "agent",
+          "content": "题面第 3.1 节说“通过 stdin 接收 SQL”，但 STDIO_PROTOCOL.md 的实际判题器是 JSON Lines：每行一个 {\"id\",\"op\",\"sql\",\"search_mode\"}，程序必须先主动输出 {\"type\":\"ready\"} 再逐行应答，shutdown 之后不能再有任何 stdout 输出且退出码必须为 0。这条差异决定了 server 层的写法，不能做成简单的 SQL 提示符。"
+        },
+        {
+          "role": "tool",
+          "content": "STDIO_PROTOCOL.md：“每个请求恰好返回一个响应，原样回传请求 id”“必须在等待第一条请求之前输出 {\"type\":\"ready\"}”“关闭响应之后 stdout 不得再输出任何内容，包括 Bye 或空行”。_transport.py 的 Session.read() 用 selectors 等待一行 JSON，send() 在发送前检查是否有未消费输出，shutdown() 校验退出码与多余输出。"
+        },
+        {
+          "role": "agent",
+          "content": "据此把实现分成 server（协议与错误映射）与 engine（语义）两层，stdout 只在 send() 里写，日志全部走 stderr。这样 shutdown 的“无多余输出”和 execute 的“错误后继续服务”可以分别验证。"
+        }
+      ]
+    },
+    {
+      "id": "C3",
+      "title": "本地自测入口：绕开 PowerShell 引号问题",
+      "turns": [
+        {
+          "role": "agent",
+          "content": "protocol_check/run.py 支持 --command 直接拉起源码，但它的 _transport 在 Windows 上不可用（selectors 只能对 socket 生效，且 os.killpg 不存在）。改在 WSL 的 Ubuntu 22.04 里跑，与正式环境同为 Linux x86_64。"
+        },
+        {
+          "role": "tool",
+          "content": "PowerShell 下 --command '[...]' 的内嵌双引号被吞掉，run.py 报 json.decoder.JSONDecodeError: Expecting value: line 1 column 2；改为在 WSL 中执行，并新增 tools/local_check.py 用 json.dumps 生成参数，避免任何 shell 引号参与。"
+        },
+        {
+          "role": "agent",
+          "content": "自测脚本不是判题材料，但它决定了后续每次改动能否在 10 秒内回归 20 个公开用例，所以先把工具链修好比先写引擎更划算。"
+        }
+      ]
+    },
+    {
+      "id": "C4",
+      "title": "存储与提交点：为什么把 commit 记录挪到独立文件",
+      "turns": [
+        {
+          "role": "agent",
+          "content": "第一版把 commit 帧写在每张表的日志尾部。问题在跨表事务：提交要给 N 个表各写一条 commit 帧并各自 fsync，崩溃可能停在中间，于是表 A 可见、表 B 不可见，违反“未提交事务不能部分生效”。改成独立 commit.log：表文件只放 op+txn+pk+行数据，提交点只有一条 9 字节记录，一次 fsync 决定整个事务是否生效。"
+        },
+        {
+          "role": "tool",
+          "content": "crash_check.py 的 commit_confirmed 场景：BEGIN + 100 行 INSERT + COMMIT 得到 ok:true 后 SIGKILL，重启后 SELECT 仍返回 100 行；commit_race 场景：发出 COMMIT 后立刻 SIGKILL，重启后行数为 0 或 100，从未出现中间值。"
+        },
+        {
+          "role": "agent",
+          "content": "代价是表文件里会留下未提交事务的记录（不可见即可视为未发生），所以启动时要能识别并重写这些表，否则事务号重新计数后可能让旧记录“复活”。这一步做成 recovery 的一部分，完成前不输出 ready。"
+        }
+      ]
+    },
+    {
+      "id": "C5",
+      "title": "查询性能：先量，再改",
+      "turns": [
+        {
+          "role": "agent",
+          "content": "10k 行 × 128 维、1000 次 TopK 的首轮测量是 41.44 ms/查询，远超预期。分项看：列式快照缓存以“事务对象身份”当键，而自动提交的每条语句都会新建事务对象，缓存永不命中，等于每次查询都重建 10k 行快照。改用每次写入自增的 generation 作为键后降到 6.02 ms。"
+        },
+        {
+          "role": "tool",
+          "content": "bench 输出对比：{\"label\": \"columnar\", \"query_ms_per_query\": 41.44} → 修复后 {\"label\": \"columnar\", \"query_ms_per_query\": 6.02}；随后把 VARCHAR 过滤改成字典编码比较 int32，再降到 4.19；同一负载强制逐行路径为 46.06–51.70 ms/query。"
+        },
+        {
+          "role": "agent",
+          "content": "装载侧同样是先量再改：128 维向量文本约 1.2 KB，词法分析器逐字符扫描字符串字面量，10k 行装载 2.94 s；改成用 str.find 定位结束引号（并处理转义与双写引号）后为 1.86 s。这两处都是测量指出的热点，不是凭感觉优化。"
+        }
+      ]
+    },
+    {
+      "id": "C6",
+      "title": "交付前核查：镜像、规范点、崩溃恢复",
+      "turns": [
+        {
+          "role": "agent",
+          "content": "公开用例只覆盖 20 个场景，正式准入是 29 个并另有 9 个保留用例，所以补了 15 条公开题包没覆盖的规范检查（NaN/Infinity/溢出/维度、表级主键、SELECT *、语句原子性、多语句请求、撕裂尾部恢复等），以及公开题包没有强杀指令的自建崩溃用例。"
+        },
+        {
+          "role": "tool",
+          "content": "spec_check 首轮 12/15：table_level_primary_key_and_select_star FAIL —— SELECT * FROM t ORDER BY id 返回 unsupported_sql: cannot order by a VECTOR column。原因是列式发射路径对向量列也调用了只支持标量列的取列函数。补了向量列的矩阵发射分支后 15/15。"
+        },
+        {
+          "role": "tool",
+          "content": "最终核查：镜像 protocol_check 21 行 PASS（握手 1 + 公开用例 20），exit=0；crash_check 9/9 PASS；spec_check 15/15；diff -r 官方 mysqltest/protocol_check/STDIO_PROTOCOL.md 与提交内容一致（ORGANIZER_FILES_IDENTICAL）。"
+        }
+      ]
+    }
+  ],
+  "experiments": [
+    {
+      "id": "E1",
+      "question": "第一版实现能否通过公开用例？",
+      "command": "python3 tools/local_check.py --output results/local-20261117-182054",
+      "output": "sql_crud: FAIL line 1: CREATE TABLE docs (id BIGINT PRIMARY KEY, content VARCHAR(16));: statement failed: {'id': 1, 'ok': False, 'error': {'code': 'storage_error', 'message': 'missing table file /tmp/vectordb-p4jcvxw0/table_1.dat'}}",
+      "finding": "20 个用例全部在同一条建表语句上失败：Table 构造时没有为新表带 create=True，存储层把“文件不存在”当成致命错误。",
+      "author": "agent"
+    },
+    {
+      "id": "E2",
+      "question": "修掉建表后还剩哪些失败？",
+      "command": "python3 tools/local_check.py --output results/local-20261117-182104",
+      "output": "sql_comparisons: FAIL line 3: SELECT id FROM docs WHERE value >= 20 AND value < 30;: statement failed: {'id': 3, 'ok': False, 'error': {'code': 'syntax_error', 'message': \"unexpected token '='\"}}；vector_index_maintenance: FAIL line 3: CREATE VECTOR INDEX docs_vec ON docs(embedding);: statement failed: {'id': 3, 'ok': False, 'error': {'code': 'unsupported_sql', 'message': 'statement create_index'}}",
+      "finding": "两个独立缺陷：二元运算符表只登记了 <> 与 !=，<= 和 >= 被拆成两段；解析器产出 kind=create_index，执行器只匹配 create_vector_index。",
+      "author": "agent"
+    },
+    {
+      "id": "E3",
+      "question": "源码自测全绿，镜像里是否一样？",
+      "command": "python3 protocol_check/run.py --image minivectordb:dev --output results/docker-20261117-182249",
+      "output": "sql_empty: FAIL line 2: SELECT id FROM docs;: statement failed: {'id': 2, 'ok': False, 'error': {'code': 'internal_error', 'message': '0'}}；sql_crud: FAIL line 7: SELECT id FROM docs;: statement failed: {'id': 7, 'ok': False, 'error': {'code': 'internal_error', 'message': '0'}}",
+      "finding": "镜像内装了 numpy 走列式路径，空表时没有为非向量列建数组，取列触发 KeyError(0)；本地无 numpy 走逐行路径，所以源码自测看不到这个问题。这证明“本地通过”和“镜像通过”是两件事。",
+      "author": "agent"
+    },
+    {
+      "id": "E4",
+      "question": "已确认提交的数据在强杀后是否真的存在？",
+      "command": "python3 tools/crash_check.py",
+      "output": "committed_survives 场景第一次运行：AssertionError: []（重启后 SELECT id, content FROM docs 返回空，期望 [[1,'committed']]）",
+      "finding": "storage.recover() 仍按第一版设计实现：只在表文件里找提交帧，而提交点已经移到 commit.log，于是所有带事务号的记录都被当成孤儿。修复为 Engine 先读 commit.log 得到已提交集合，再把集合传给每张表的重建过程。",
+      "author": "agent"
+    },
+    {
+      "id": "E5",
+      "question": "为什么查询是 41 ms 而不是几毫秒？",
+      "command": "python3 tools/bench.py --label columnar",
+      "output": "{\"label\": \"columnar\", \"rows\": 10000, \"dim\": 128, \"queries\": 1000, \"load_seconds\": 2.96, \"query_seconds\": 41.442, \"query_ms_per_query\": 41.44, \"recall_at_10\": 1.0, \"peak_rss_mb_query\": 102.3}",
+      "finding": "列式快照缓存的键里含事务对象身份，自动提交每条语句都是新事务对象，缓存 0 命中，每次查询重建 10k 行快照。改为按 generation 缓存后同一负载 6.02 ms/query。",
+      "author": "agent"
+    },
+    {
+      "id": "E6",
+      "question": "列式路径到底比逐行参考路径快多少？两者结果是否一致？",
+      "command": "python3 tools/bench.py --label columnar ；MVDB_DISABLE_COLUMNAR=1 python3 tools/bench.py --label rows",
+      "output": "columnar: {\"query_ms_per_query\": 5.07, \"load_seconds\": 1.99, \"recall_at_10\": 1.0}；rows: {\"query_ms_per_query\": 48.66, \"load_seconds\": 1.943, \"recall_at_10\": 1.0}。同一批 20 个公开用例在两条路径下各跑一遍均为 20/20 PASS。",
+      "finding": "列式路径约快 9.6 倍；ann 与 exact 的 Recall@10 都是 1.0（ann 复用精确扫描）；两条路径在公开用例上结果完全一致，说明优化没有放宽语义。",
+      "author": "agent"
+    },
+    {
+      "id": "E7",
+      "question": "装载 10k 行 2.94 s 的瓶颈在哪里？",
+      "command": "python3 tools/bench.py --label columnar（词法优化前后对比）",
+      "output": "优化前 load_seconds: 2.94；把字符串字面量扫描从逐字符改为 str.find 定位结束引号后 load_seconds: 1.86。128 维向量文本约 1.2 KB/行，10k 行即 12 MB 字符逐个 append，是装载的主要成本。",
+      "finding": "热点在词法分析而不是存储写入：改成 C 层 find 后装载时间下降约 37%，同时保留转义与双写引号的语义。",
+      "author": "agent"
+    },
+    {
+      "id": "E8",
+      "question": "公开用例之外，规范点是否都满足？",
+      "command": "python3 tools/spec_check.py",
+      "output": "首轮：table_level_primary_key_and_select_star FAIL —— SELECT * FROM t ORDER BY id; -> {'id': 3, 'ok': False, 'error': {'code': 'unsupported_sql', 'message': 'cannot order by a VECTOR column'}}；12/15 checks passed。修复后：15/15 checks passed。",
+      "finding": "投影含向量列时，列式发射路径对向量列也调用了标量取列函数。补上矩阵发射分支后 SELECT *、SELECT id,c,v 与含向量列的普通查询全部可用；这条缺陷公开用例覆盖不到，因为公开用例从不投影向量列。",
+      "author": "agent"
+    },
+    {
+      "id": "E9",
+      "question": "最终提交版本在镜像与崩溃模型下是否稳定？",
+      "command": "docker build -t minivectordb:dev . && python3 protocol_check/run.py --image minivectordb:dev --output results/docker-20261117-184018 ；python3 tools/crash_check.py",
+      "output": "镜像用例：21 行 PASS（握手 1 + 公开用例 20），exit=0；crash_check：committed_survives / uncommitted_dropped / commit_confirmed / kill_during_recovery / commit_race_1..5 共 9 项全部 PASS。",
+      "finding": "三种验证（官方公开用例、补充规范检查、自建强杀用例）在同一版本上同时通过；镜像内 numpy 路径与源码纯 Python 路径都覆盖到了。",
+      "author": "agent"
+    },
+    {
+      "id": "E10",
+      "question": "是否改动了组织方材料？",
+      "command": "cd /mnt/d/mvdb_work && diff -r official/mysqltest submit/mysqltest && diff -r official/protocol_check submit/protocol_check && diff official/STDIO_PROTOCOL.md submit/STDIO_PROTOCOL.md && echo ORGANIZER_FILES_IDENTICAL",
+      "output": "ORGANIZER_FILES_IDENTICAL",
+      "finding": "mysqltest、protocol_check、STDIO_PROTOCOL.md 与官方 2026-competition-round2 分支逐字节一致，全部改动都在新增文件里。",
+      "author": "agent"
+    }
+  ],
+  "instances": [
+    {
+      "id": "I1",
+      "dimension": "问题理解与自主拆解",
+      "summary": "学生在开赛就把“只做加赛 prompt 项”与“不得读已有实现、从零新建分支、不动组织方文件”拆成可核对的约束，并说明理由（已有实现均为零分）。",
+      "student_evidence": [
+        {
+          "pointer": "/user_prompts/0/content",
+          "quote": "我要求你不要阅读他们，因为他们全是错的，全是零分，我要求你不能看他们，我不需要你纠正他们为什么错了。"
+        },
+        {
+          "pointer": "/user_prompts/0/content",
+          "quote": "还有就是一定要满足题干要求，不要乱删乱改人家要求的东西。"
+        }
+      ],
+      "result_evidence": [
+        {
+          "pointer": "/experiments/9/output",
+          "quote": "ORGANIZER_FILES_IDENTICAL"
+        }
+      ],
+      "declared_tier": 1.0,
+      "tier_reason": "学生提出了具体、可核对的方案（隔离错误材料、从零建分支、不动题包），且结果可验证；但验证动作由 Agent 执行，解释也由 Agent 完成，所以不按 1.5 计。",
+      "author": "student+agent"
+    },
+    {
+      "id": "I2",
+      "dimension": "独立验证与质疑",
+      "summary": "学生对“仓库里已有解答”这一现成结论持否定态度，并要求以全新分支重做，等价于要求放弃可复用的答案、重新独立验证。",
+      "student_evidence": [
+        {
+          "pointer": "/user_prompts/0/content",
+          "quote": "当前这个my-seekdb-2026这个仓库里的有些分支里面可能已经有prompt这道题的解答了"
+        },
+        {
+          "pointer": "/user_prompts/0/content",
+          "quote": "如果需要使用磁盘的话就用D盘，但是不要读D盘里面现有的关于prompt的解题，因为也是错的。"
+        }
+      ],
+      "result_evidence": [
+        {
+          "pointer": "/experiments/7/output",
+          "quote": "修复后：15/15 checks passed。"
+        }
+      ],
+      "declared_tier": 0.5,
+      "tier_reason": "学生提出了隔离与重做的验证方案并被执行，但“为什么不能用已有材料”“如何判断新实现是对的”这些判断由 Agent 给出，学生没有留下自己的判据。",
+      "author": "student+agent"
+    },
+    {
+      "id": "I3",
+      "dimension": "取舍与反思",
+      "summary": "学生没有对方案代价（ann 复用精确扫描、行式日志写放大、内存预算）发表过自己的取舍判断；现有取舍文字出自 DESIGN.md 第 7 节，作者是 Agent。",
+      "student_evidence": [],
+      "result_evidence": [],
+      "declared_tier": 0.0,
+      "tier_reason": "缺少学生本人对结果与代价的解释，按 3.4.2 不构成实例，仅作为缺口记录。",
+      "author": "agent"
+    }
+  ],
+  "retrospective": {
+    "author": "agent",
+    "content": "这次工作的顺序是“先对齐协议、再实现、再用三种互不替代的方式验证”。收获最大的地方不是写出引擎，而是三次被验证推翻的假设：源码自测全绿但镜像失败（numpy 路径未被本地覆盖）；提交点搬到 commit.log 后恢复逻辑没跟着改，强杀会丢已提交数据；性能问题出在缓存键而不是算法。三次都属于“看起来对了但没验证”的典型，也都只有实测才能暴露。",
+    "next_steps": [
+      "把 ann 从“复用精确扫描”换成真正的近似索引（IVF 或 HNSW），并保留 exact 模式的真值对照",
+      "为跨表事务补一条显式用例：崩溃点落在两张表的 fsync 之间",
+      "对大于内存预算的表做一次 200k 行压力测试，验证列式快照退化为逐行路径后的正确性与耗时"
+    ]
+  },
+  "limitations": [
+    "学生侧只有 U1 一条有内容的发言，技术理解、独立验证、实验闭环、反思四个维度缺少学生本人的表述，本材料没有用 Agent 的输出替代。",
+    "所有实验都是本地（WSL Ubuntu 22.04 + Docker）实测，未使用平台正式评测数据。",
+    "bench 为自建负载，数据分布与正式 benchmark 不完全相同，只用于同机对比两条查询路径。",
+    "ann 模式当前等于精确扫描，Recall@10 恒为 1.0，未实现近似索引，规模增大时查询线性变慢。"
+  ]
+}

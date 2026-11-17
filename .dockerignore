@@ -1,0 +1,8 @@
+mysqltest/
+protocol_check/
+results/
+tools/
+agent/
+.git/
+__pycache__/
+*.pyc

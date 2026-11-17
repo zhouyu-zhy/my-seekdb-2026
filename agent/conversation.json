@@ -564,10 +564,11 @@
       "executed_by": "student-provided-log",
       "output": "200 行、20 个查询的本地实验中 `recall_at_10:1.0`；exact 约 0.00130 秒，ann 约 0.00124 秒。",
       "environment_note": "",
-      "retest_actual": "Q33 exact=0.003512s ann=0.003004s recall_at_10=1.0 queries=20",
+      "retest_actual": "Q33 exact=0.003921s ann=0.002831s recall_at_10=1.0 queries=20",
       "retest_note": "学生已按本机输出修订B/E，升级为1.5分档。",
       "student_result_explanation": "复测实际 Recall@10 为 1.0，exact 约 0.003512 秒，ann 约 0.003004 秒，ann 略快但差距小。这支持当前“精确优先”的取舍；局限是还没有实现真正 ANN，不能证明大规模下近似索引的优势。",
-      "student_result_explanation_revised": true
+      "student_result_explanation_revised": true,
+      "performance_recheck": "最终性能构建复测：exact 0.003921 秒，ann 0.002831 秒，Recall@10 1.0；原文 0.003512 和 0.003004 是优化前数值。"
     },
     {
       "id": "e8-q34",
@@ -1260,11 +1261,11 @@
         "pointer": "/experiments/31/output",
         "quote": "200 行、20 个查询的本地实验中 `recall_at_10:1.0`；exact 约 0.00130 秒，ann 约 0.00124 秒。"
       },
-      "reason": "A(2).md 记录学生判断和本次真实输出，结果与判断一致；该题没有单独留下实验前预测，按1分档。 A(3)原文的B/E与本机复测输出不一致，当前保持1分档，待修正后再升级。 学生修订B/E后与本机复测一致，增加了复测输出，按1.5分档。",
+      "reason": "A(2).md 记录学生判断和本次真实输出，结果与判断一致；该题没有单独留下实验前预测，按1分档。 A(3)原文的B/E与本机复测输出不一致，当前保持1分档，待修正后再升级。 学生修订B/E后与本机复测一致，增加了复测输出，按1.5分档。 最终性能构建复测耗时已更新为0.003921和0.002831秒。",
       "provenance": "A(2).md Q33",
       "retest_evidence": {
         "pointer": "/experiments/31/retest_actual",
-        "quote": "Q33 exact=0.003512s ann=0.003004s recall_at_10=1.0 queries=20"
+        "quote": "Q33 exact=0.003921s ann=0.002831s recall_at_10=1.0 queries=20"
       }
     },
     {
@@ -1391,14 +1392,14 @@
         "pointer": "/experiments/38/output",
         "quote": "PLAN_FILE_BYTES 16233223"
       },
-      "reason": "学生把大问题拆成写入、查询、恢复三个可独立验证的实验，并用数据文件 16.2MB、4MiB 缓存、8,768kB 峰值 RSS 和重启后 id 30000 解释结果；没有提出修正并做第二次复测，因此按1分档而不是1.5或2.0。 增加了60,000行迁移和局限分析，按2.0分档。",
+      "reason": "学生把大问题拆成写入、查询、恢复三个可独立验证的实验，并用数据文件 16.2MB、4MiB 缓存、8,768kB 峰值 RSS 和重启后 id 30000 解释结果；没有提出修正并做第二次复测，因此按1分档而不是1.5或2.0。 增加了60,000行迁移和局限分析，按2.0分档。 性能合并后复测60k峰值为9392kB，原文9068kB为优化前数值。",
       "provenance": "A(6).md P1 + 本机 plan_large.py 实际输出",
       "transfer_evidence": {
         "prediction_pointer": "/planning_transfer/prediction",
         "prediction_quote": "我预期数据从 30,000 行翻倍到 60,000 行后，文件会从约 16.2 MB 增到约 32.5 MB",
         "explanation_pointer": "/planning_transfer/explanation",
         "result_pointer": "/planning_transfer/result_actual",
-        "result_quote": "PLAN60_HWM VmHWM: 9068 kB",
+        "result_quote": "PLAN60_HWM VmHWM: 9392 kB",
         "limitation_pointer": "/planning_transfer/limitation",
         "limitation_quote": "这次迁移仍未覆盖 10 倍数据量、并发查询、缓存淘汰策略"
       }
@@ -1418,7 +1419,8 @@
     "验证限制：性能数字来自开发机 WSL2，不是评测机；没有实现真正的 IVF/HNSW，ann 模式返回精确结果。",
     "Q01到Q50的题目由Agent生成，回答由学生提供；Q16到Q50没有实验前预测，按1分档。Q40已由Agent在Linux Docker实际运行；Q35、Q38、Q39已从材料删除。",
     "C1到C8的迁移回答来自学生A(4).md，实际结果来自本机复测；每个核心单元已补局限分析。其余单元保持原有档位，未把Agent解释算作学生迁移证据。",
-    "E1、E2的迁移回答来自学生A(5).md，实际结果来自本机复测；当前文件已接近128 KiB，后续不再直接追加普通实例。"
+    "E1、E2的迁移回答来自学生A(5).md，实际结果来自本机复测；当前文件已接近128 KiB，后续不再直接追加普通实例。",
+    "性能合并后的提交路径改为每次提交只刷新内核页缓存，不再逐提交 fdatasync；Q03、Q21、Q24 的 SIGKILL 证据仍对应进程终止模型，checkpoint 和正常关闭仍使用设备同步，但没有覆盖主机掉电。P1 和 Q33 的耗时/峰值已按最终构建复测更新。"
   ],
   "student_confirmation": {
     "author": "student",
@@ -1532,7 +1534,8 @@
     "core_unit": "unit-p1-decomposition",
     "prediction": "我预期数据从 30,000 行翻倍到 60,000 行后，文件会从约 16.2 MB 增到约 32.5 MB，但 4 MiB 缓存不变；TopK 返回的 id 和距离应基本不变，峰值 RSS 只会小幅增长而不是翻倍，因为查询按需读取数据、不把整表常驻内存；重启后最大 id 应为 60,000，因为写入已持久化。",
     "explanation": "实际文件为 32,466,343 字节，约 32.5 MB，缓存预算仍是 4 MiB；TopK 仍返回 id 100、200、300、400、500，距离约 57.90336777690582，与 30,000 行时相同。进程峰值 RSS 约 9,068 kB，相比 30,000 行时的约 8,768 kB 只增加约 300 kB，没有随文件翻倍。重启后最大 id 返回 60,000，说明数据文件已持久化并能恢复。这支持“流式扫描、不整表常驻”的结论。",
-    "result_actual": "PLAN60_FILE_BYTES 32466343; PLAN60_HWM VmHWM: 9068 kB; PLAN60_RESTART_LAST [[60000]]; TopK 不变。",
-    "limitation": "这次迁移仍未覆盖 10 倍数据量、并发查询、缓存淘汰策略、恢复耗时以及删除后的文件空洞，因此还不能说明所有超过内存预算的场景都同样稳定。"
+    "result_actual": "PLAN60_FILE_BYTES 32466343; PLAN60_HWM VmHWM: 9392 kB; PLAN60_RESTART_LAST [[60000]]; TopK 不变。",
+    "limitation": "这次迁移仍未覆盖 10 倍数据量、并发查询、缓存淘汰策略、恢复耗时以及删除后的文件空洞，因此还不能说明所有超过内存预算的场景都同样稳定。",
+    "performance_recheck": "性能合并后最终构建复测：30k 峰值 8768 kB，60k 峰值 9392 kB；学生原文的 9068 kB 来自优化前构建。结论仍成立。"
   }
 }

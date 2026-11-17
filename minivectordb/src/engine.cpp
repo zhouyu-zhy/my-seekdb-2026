@@ -58,10 +58,13 @@ Value valueForColumn(const Column& c, const Literal& lit) {
         if (utf8Length(lit.s) > c.length) fail("value_too_long", "string exceeds VARCHAR length");
         v.s = lit.s;
     } else {
-        std::vector<double> nums;
         if (lit.kind == Literal::STR) {
-            nums = parseVectorText(lit.s, c.length);
-        } else if (lit.kind == Literal::VECLIT) {
+            v.v = parseVectorTextFloat(lit.s, c.length);
+            if (v.v.size() != c.length) fail("dimension_mismatch", "vector dimension does not match column");
+            return v;
+        }
+        std::vector<double> nums;
+        if (lit.kind == Literal::VECLIT) {
             nums = lit.v;
         } else {
             fail("type_mismatch", "VECTOR requires an array literal");

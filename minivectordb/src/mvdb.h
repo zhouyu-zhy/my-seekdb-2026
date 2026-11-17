@@ -196,6 +196,7 @@ struct Statement {
 
 Statement parseStatement(const std::string& sql);
 std::vector<double> parseVectorText(const std::string& text, size_t expectedSize = 0);
+std::vector<float> parseVectorTextFloat(const std::string& text, size_t expectedSize = 0);
 
 // ---------------------------------------------------------------------------
 // Storage / execution engine

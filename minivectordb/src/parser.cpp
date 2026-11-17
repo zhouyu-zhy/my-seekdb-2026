@@ -2,6 +2,7 @@
 #include "string_scan.h"
 
 #include <cctype>
+#include <cfloat>
 #include <charconv>
 #include <cerrno>
 #include <cmath>
@@ -774,6 +775,68 @@ std::vector<double> parseVectorText(const std::string& text, size_t expectedSize
         }
         if (!std::isfinite(d)) fail("invalid_vector", "vector component must be finite");
         out.push_back(d);
+        i = static_cast<size_t>(end - text.data());
+        skipws();
+        if (i < text.size() && text[i] == ',') {
+            ++i;
+            continue;
+        }
+        if (i < text.size() && text[i] == ']') {
+            ++i;
+            skipws();
+            if (i != text.size()) fail("invalid_vector", "trailing characters after vector literal");
+            break;
+        }
+        fail("invalid_vector", "malformed vector literal");
+    }
+    return out;
+}
+
+// Same grammar and error codes as parseVectorText, but converts each component
+// to float32 in place and validates the float range while parsing.  The row
+// path uses it to avoid a throw-away vector<double> per row.
+std::vector<float> parseVectorTextFloat(const std::string& text, size_t expectedSize) {
+    std::vector<float> out;
+    out.reserve(expectedSize < text.size() / 2 ? expectedSize : text.size() / 2);
+    size_t i = 0;
+    auto skipws = [&]() {
+        while (i < text.size() && std::isspace(static_cast<unsigned char>(text[i]))) ++i;
+    };
+    skipws();
+    if (i >= text.size() || text[i] != '[') fail("invalid_vector", "vector literal must start with '['");
+    ++i;
+    skipws();
+    if (i < text.size() && text[i] == ']') {
+        ++i;
+        skipws();
+        if (i != text.size()) fail("invalid_vector", "trailing characters after vector literal");
+        return out;
+    }
+    for (;;) {
+        skipws();
+        if (i >= text.size()) fail("invalid_vector", "unterminated vector literal");
+        const char* begin = text.data() + i;
+        double d = 0;
+        const auto parsed = std::from_chars(begin, text.data() + text.size(), d);
+        const char* end = parsed.ptr;
+        if (parsed.ec != std::errc{} ||
+            (end < text.data() + text.size() && (*end == 'x' || *end == 'X')) ||
+            (d != 0 && std::fabs(d) < std::numeric_limits<double>::min())) {
+            char* fallbackEnd = nullptr;
+            errno = 0;
+            d = std::strtod(begin, &fallbackEnd);
+            if (fallbackEnd == begin || errno == ERANGE) {
+                fail("invalid_vector", "invalid vector component");
+            }
+            end = fallbackEnd;
+        }
+        if (!std::isfinite(d)) fail("invalid_vector", "vector component must be finite");
+        if (std::fabs(d) > static_cast<double>(FLT_MAX)) {
+            fail("invalid_vector", "vector component is not a finite float32");
+        }
+        const float f = static_cast<float>(d);
+        if (!std::isfinite(f)) fail("invalid_vector", "vector component overflows float32");
+        out.push_back(f);
         i = static_cast<size_t>(end - text.data());
         skipws();
         if (i < text.size() && text[i] == ',') {

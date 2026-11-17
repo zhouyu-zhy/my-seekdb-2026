@@ -35,6 +35,10 @@ and queries CLI options support other workloads.
    falls back to the general executor, so results stay exact.
 3. `l2DistancePtr` moved to `src/distance.h` so both paths share the same
    accumulation order and therefore the same reported bits.
+4. Row vector literals are converted to float32 while they are parsed
+   (`parseVectorTextFloat`), so an INSERT no longer materialises a throw-away
+   `vector<double>` per row, and the shortlist loop only loads a primary key
+   when a score ties the current cutoff.
 
 ## Measured on the development machine (median of three paired rounds)
 

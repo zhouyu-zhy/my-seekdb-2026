@@ -188,6 +188,10 @@ ScanStatus scanVectorTopK(const TableData& table, const float* query, size_t k,
     const size_t keep = std::min(rows, std::max<size_t>(128, 4 * k + 32));
     const size_t cap = std::min(rows, 2 * keep);
 
+    const uint8_t* qrows = reinterpret_cast<const uint8_t*>(table.scanQ.data());
+    const int32_t* norms = table.scanNorm.data();
+    const int64_t* pks = table.scanPk.data();
+
     // Reserve the slots up front: the scan writes through `buffer` before the
     // vector's size is final, so the elements must already exist.
     std::vector<Cand> cand(cap + 1);
@@ -199,11 +203,14 @@ ScanStatus scanVectorTopK(const TableData& table, const float* query, size_t k,
     auto score = [&](int32_t biased, int32_t norm) {
         return static_cast<double>(norm) - lambda * static_cast<double>(biased);
     };
-    auto push = [&](int32_t biased, int32_t norm, int64_t pk, size_t slot) {
+    auto push = [&](int32_t biased, int32_t norm, size_t slot) {
         const double s = score(biased, norm);
-        if (!(s < thrScore || (s == thrScore && pk < thrPk))) return;
+        if (!(s < thrScore)) {
+            // Only near-ties need the primary key to settle the order.
+            if (!(s == thrScore && pks[slot] < thrPk)) return;
+        }
         buffer[count].score = s;
-        buffer[count].pk = pk;
+        buffer[count].pk = pks[slot];
         buffer[count].slot = static_cast<uint32_t>(slot);
         ++count;
         if (count >= cap) {
@@ -218,13 +225,10 @@ ScanStatus scanVectorTopK(const TableData& table, const float* query, size_t k,
         }
     };
 
-    const uint8_t* qrows = reinterpret_cast<const uint8_t*>(table.scanQ.data());
-    const int32_t* norms = table.scanNorm.data();
-    const int64_t* pks = table.scanPk.data();
     if (codes) {
         for (size_t slot = 0; slot < rows; ++slot) {
             if (static_cast<int32_t>(codes[slot]) != code) continue;
-            push(dotCodes1(qb.data(), qrows + slot * dim, dim), norms[slot], pks[slot], slot);
+            push(dotCodes1(qb.data(), qrows + slot * dim, dim), norms[slot], slot);
         }
     } else {
         size_t slot = 0;
@@ -232,13 +236,13 @@ ScanStatus scanVectorTopK(const TableData& table, const float* query, size_t k,
             int32_t d[4] = {0, 0, 0, 0};
             dotCodes4(qb.data(), qrows + slot * dim, qrows + (slot + 1) * dim,
                       qrows + (slot + 2) * dim, qrows + (slot + 3) * dim, dim, d);
-            push(d[0], norms[slot], pks[slot], slot);
-            push(d[1], norms[slot + 1], pks[slot + 1], slot + 1);
-            push(d[2], norms[slot + 2], pks[slot + 2], slot + 2);
-            push(d[3], norms[slot + 3], pks[slot + 3], slot + 3);
+            push(d[0], norms[slot], slot);
+            push(d[1], norms[slot + 1], slot + 1);
+            push(d[2], norms[slot + 2], slot + 2);
+            push(d[3], norms[slot + 3], slot + 3);
         }
         for (; slot < rows; ++slot) {
-            push(dotCodes1(qb.data(), qrows + slot * dim, dim), norms[slot], pks[slot], slot);
+            push(dotCodes1(qb.data(), qrows + slot * dim, dim), norms[slot], slot);
         }
     }
     cand.resize(count);

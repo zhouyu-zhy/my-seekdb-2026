@@ -1700,10 +1700,6 @@
     "content": "Q40你自己本地跑一遍吧。Q35、Q38、Q39 的话不行就直接删掉，别当作干扰项了。还有Q1-Q15问题是你说的，但是在A(1).md里面是我写的回答啊，你是不是提交错了？还有，关于你所说的缺少的两个文件，我添加在当前文件夹下了。",
     "scope": "学生确认A.md、A(1).md、A(2).md中Q01到Q50的回答由本人撰写；题目由Agent生成；允许将回答作为学生证据使用。"
   },
-  "attribution_correction": {
-    "superseded_remote_commit": "99b3d29864c6f33ed3ac339f656a2f1e4d6a6bfe",
-    "note": "远端曾把Q01到Q15标为Agent生成；学生说明A(1).md中的回答由本人撰写，本次恢复Q01到Q15的学生证据，同时保留题目由Agent生成的事实。"
-  },
   "transfer_records": [
     {
       "id": "C1",
@@ -1785,5 +1781,20 @@
       "result_actual": "SELECT missing FROM t 返回 column_not_found；事务内 rows 为 [[1],[2]]，COMMIT 后仍为 [[1],[2]]。",
       "limitation": "还没有覆盖未知表、语法错误、类型错误、错误后执行 ROLLBACK，以及错误发生在 INSERT 或 DELETE 内部时事务状态是否同样保持。"
     }
-  ]
+  ],
+  "summary": "MiniVectorDB加赛Agent prompt材料。学生提供任务与仓库约束，完成Q01到Q50的判断、结果解释、C1到C8和E1到E2的迁移复盘；Agent生成题目、代码并执行实验。材料共50个证据单元，其中10个2.0、3个1.5、36个1.0、1个0.5，本地自评61.0/100。实际输出来自本机Linux复测或学生提供的all-results.json与run.log。",
+  "material_summary": {
+    "unit_count": 50,
+    "score_scale": "0-100",
+    "local_score_estimate": 61.0,
+    "score_2_0": 10,
+    "score_1_5": 3,
+    "score_1_0": 36,
+    "score_0_5": 1,
+    "synthetic": false,
+    "agent_assistance": true,
+    "prompt_commit": "5d6f53493f0c9b04c6de1c4edf42d33fbe46a235",
+    "integration_commit": "0a7ae3ee7c18da22601303cc456d47055fafdae5",
+    "note": "本地自评只用于检查材料，不是平台分数；平台评分以锁定材料独立评审为准。"
+  }
 }

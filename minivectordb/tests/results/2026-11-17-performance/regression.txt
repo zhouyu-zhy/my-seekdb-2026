@@ -1,0 +1,11 @@
+mvdb-5d6-baseline 1 write=0.6097 query=0.2013 rss_kib=14640
+minivectordb-avx2 1 write=0.5483 query=0.1661 rss_kib=14548
+minivectordb-avx2 2 write=0.5327 query=0.1719 rss_kib=14556
+mvdb-5d6-baseline 2 write=0.5639 query=0.2006 rss_kib=14584
+mvdb-5d6-baseline 3 write=0.5628 query=0.1887 rss_kib=14640
+minivectordb-avx2 3 write=0.5502 query=0.1656 rss_kib=14496
+PASS 3000 exact response comparisons across 3 paired runs and 20 independent brute-force queries
+PASS exact/ANN ties, ±1e38/denormals, illegal vectors, failed transaction statement, SIGKILL and torn tail
+PASS 608-row sketch ties, out-of-range query fallback, rollback, and committed index invalidation
+PASS interrupted recovery, WAL=76207853 bytes under a 64 MiB address-space cap; peak RSS=6008 KiB
+PASS identical WAL bytes and bidirectional old/new recovery after SIGKILL

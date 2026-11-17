@@ -1,13 +1,17 @@
 // JSON-lines front end for the judge.
 #include "mvdb.h"
+#include "string_scan.h"
 
 #include <cerrno>
+#include <charconv>
+#include <limits>
 #include <cmath>
 #include <cstdlib>
 #include <fstream>
 #include <iostream>
 #include <sstream>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #ifdef _WIN32
@@ -100,11 +104,9 @@ private:
         std::string out;
         while (i_ < s_.size()) {
             const size_t begin = i_;
-            while (i_ < s_.size() && s_[i_] != '"' && s_[i_] != '\\') {
-                if (static_cast<unsigned char>(s_[i_]) < 0x20) {
-                    throw std::runtime_error("unescaped JSON control character");
-                }
-                ++i_;
+            i_ = scanStringSpan(s_, i_, '"', true);
+            if (i_ < s_.size() && static_cast<unsigned char>(s_[i_]) < 0x20) {
+                throw std::runtime_error("unescaped JSON control character");
             }
             out.append(s_, begin, i_ - begin);
             if (i_ >= s_.size()) break;
@@ -258,12 +260,20 @@ void appendJsonString(std::string& out, const std::string& s) {
     out.push_back('"');
 }
 
-std::string formatDouble(double v) {
-    if (!std::isfinite(v)) v = 0.0;
-    if (v == 0.0) return "0";
-    char buf[64];
-    std::snprintf(buf, sizeof(buf), "%.17g", v);
-    return std::string(buf);
+void appendJsonDouble(std::string& out, double value)
+{
+    if (!std::isfinite(value) || value == 0.0) {
+        out += "0.0";
+        return;
+    }
+    char text[64];
+    const auto result = std::to_chars(text, text + sizeof(text), value, std::chars_format::general,
+                                      std::numeric_limits<double>::max_digits10);
+    if (result.ec != std::errc{}) throw std::runtime_error("cannot encode finite JSON number");
+    out.append(text, result.ptr);
+    if (std::string_view(text, result.ptr - text).find_first_of(".eE") == std::string_view::npos) {
+        out += ".0";
+    }
 }
 
 std::string idJson(const JValue* id) {
@@ -306,12 +316,12 @@ void writeResult(const std::string& id, const QueryResult& r) {
                 switch (v.kind) {
                     case OutVal::INT: out += std::to_string(v.i); break;
                     case OutVal::STR: appendJsonString(out, v.s); break;
-                    case OutVal::DOUBLE: out += formatDouble(v.d); break;
+                    case OutVal::DOUBLE: appendJsonDouble(out, v.d); break;
                     case OutVal::VEC: {
                         out += "[";
                         for (size_t k = 0; k < v.v.size(); ++k) {
                             if (k) out += ",";
-                            out += formatDouble(static_cast<double>(v.v[k]));
+                            appendJsonDouble(out, static_cast<double>(v.v[k]));
                         }
                         out += "]";
                         break;

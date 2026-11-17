@@ -1,4 +1,5 @@
 #include "mvdb.h"
+#include "string_scan.h"
 
 #include <cctype>
 #include <charconv>
@@ -93,7 +94,7 @@ private:
             std::string value;
             while (i_ < s_.size()) {
                 const size_t begin = i_;
-                while (i_ < s_.size() && s_[i_] != quote && s_[i_] != '\\') ++i_;
+                i_ = scanStringSpan(s_, i_, quote, false);
                 value.append(s_, begin, i_ - begin);
                 if (i_ == s_.size()) break;
                 const char ch = s_[i_++];
@@ -734,8 +735,9 @@ private:
 
 }  // namespace
 
-std::vector<double> parseVectorText(const std::string& text) {
+std::vector<double> parseVectorText(const std::string& text, size_t expectedSize) {
     std::vector<double> out;
+    out.reserve(expectedSize < text.size() / 2 ? expectedSize : text.size() / 2);
     size_t i = 0;
     auto skipws = [&]() {
         while (i < text.size() && std::isspace(static_cast<unsigned char>(text[i]))) ++i;

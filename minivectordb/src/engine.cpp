@@ -59,7 +59,7 @@ Value valueForColumn(const Column& c, const Literal& lit) {
     } else {
         std::vector<double> nums;
         if (lit.kind == Literal::STR) {
-            nums = parseVectorText(lit.s);
+            nums = parseVectorText(lit.s, c.length);
         } else if (lit.kind == Literal::VECLIT) {
             nums = lit.v;
         } else {
@@ -153,9 +153,13 @@ bool outsideTopK(const float* a, const float* b, size_t n, double squaredCutoff)
 }
 
 #if defined(__AVX2__) && defined(__FMA__)
-// Use a common power-of-two scale: rounding moves each coordinate by at
-// most half a unit, so the distance between two rounded vectors differs
-// from their original distance by at most sqrt(dim) units.
+// Dataset coordinates use signed 7-bit integers, queries use unsigned
+// 8-bit integers at half the scale. This permits a non-saturating AVX2
+// byte dot product. Keep the actual maximum residual norm of the rows
+// plus the query residual norm as a triangle-inequality error bound.
+// Each norm and the final cutoff are inflated for floating-point rounding;
+// quantization only rejects provably noncompetitive rows, never ranks them.
+// For dim<=4096, all integer dot products and bias terms fit int32_t.
 void buildSketch(TableData& table, size_t column, size_t dim)
 {
     table.sketchValid = true;
@@ -164,39 +168,47 @@ void buildSketch(TableData& table, size_t column, size_t dim)
         for (float v : row[column].v) largest = std::max(largest, std::fabs(static_cast<double>(v)));
     }
     table.sketchScale = 0;
+    table.sketchError = 0;
     if (largest == 0) return;
     int exponent = 0;
     std::frexp(largest, &exponent);
-    double scale = std::ldexp(1.0, exponent - 7);
-    if (largest > 127 * scale) scale *= 2;
+    double scale = std::ldexp(1.0, exponent - 6);
+    if (largest > 63 * scale) scale *= 2;
     const double reciprocal = 1 / scale;
     table.vectorSketch.resize(table.rows.size() * dim);
-    size_t index = 0;
+    table.sketchBias.resize(table.rows.size());
+    size_t index = 0, rowIndex = 0;
     for (const Row& row : table.rows) {
+        int32_t bias = 0;
+        double errorSquared = 0;
         for (float v : row[column].v) {
-            table.vectorSketch[index++] = static_cast<int8_t>(std::nearbyint(v * reciprocal));
+            const int a = static_cast<int>(std::nearbyint(v * reciprocal));
+            table.vectorSketch[index++] = static_cast<int8_t>(a);
+            bias += 4 * a * a + 512 * a;
+            const double error = 2 * (v * reciprocal - a);
+            errorSquared += error * error;
         }
+        table.sketchBias[rowIndex++] = bias;
+        table.sketchError = std::max(table.sketchError, std::sqrt(errorSquared) * (1 + 1e-10));
     }
-    table.sketchScale = scale;
+    table.sketchScale = scale * 0.5;
 }
 
-uint32_t sketchDistance(const int8_t* a, const int8_t* b, size_t n)
+int32_t sketchDot(const int8_t* a, const uint8_t* b, size_t n)
 {
     __m256i acc = _mm256_setzero_si256();
+    const __m256i ones = _mm256_set1_epi16(1);
     size_t i = 0;
-    for (; i + 16 <= n; i += 16) {
-        const __m128i va = _mm_loadu_si128(reinterpret_cast<const __m128i*>(a + i));
-        const __m128i vb = _mm_loadu_si128(reinterpret_cast<const __m128i*>(b + i));
-        const __m256i d = _mm256_sub_epi16(_mm256_cvtepi8_epi16(va), _mm256_cvtepi8_epi16(vb));
-        acc = _mm256_add_epi32(acc, _mm256_madd_epi16(d, d));
+    for (; i + 32 <= n; i += 32) {
+        const __m256i va = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(a + i));
+        const __m256i vb = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(b + i));
+        // abs(a)<=63 and b<=255: paired products fit signed 16 bits.
+        acc = _mm256_add_epi32(acc, _mm256_madd_epi16(_mm256_maddubs_epi16(vb, va), ones));
     }
     const __m128i half = _mm_add_epi32(_mm256_castsi256_si128(acc), _mm256_extracti128_si256(acc, 1));
     const __m128i pairs = _mm_add_epi32(half, _mm_srli_si128(half, 8));
-    uint32_t result = static_cast<uint32_t>(_mm_cvtsi128_si32(_mm_add_epi32(pairs, _mm_srli_si128(pairs, 4))));
-    for (; i < n; ++i) {
-        const int d = static_cast<int>(a[i]) - b[i];
-        result += static_cast<uint32_t>(d * d);
-    }
+    int32_t result = _mm_cvtsi128_si32(_mm_add_epi32(pairs, _mm_srli_si128(pairs, 4)));
+    for (; i < n; ++i) result += static_cast<int>(a[i]) * b[i];
     return result;
 }
 #endif
@@ -278,6 +290,7 @@ struct Cand {
     std::vector<SortKey> keys;
     int64_t pk = 0;
     double dist = 0;
+    const Row* cachedRow = nullptr;
 };
 
 OutVal valueToOut(const Value& v, ColType type) {
@@ -371,11 +384,12 @@ void Engine::discardTxn() {
 void Engine::commitTxn() {
     if (!txn_.active) return;
     std::vector<uint8_t> payload;
-    buildPayload(payload);
+    std::vector<Row*> upserts;
+    buildPayload(payload, upserts);
     if (!payload.empty()) {
         uint64_t blockStart = 0, payloadStart = 0;
         appendBlock(payload, &blockStart, &payloadStart);
-        applyPayload(payload, payloadStart);
+        applyPayload(payload, payloadStart, &upserts);
     }
     txn_ = Txn{};
     implicit_ = false;
@@ -881,16 +895,19 @@ QueryResult Engine::execSelect(const SelectStmt& st, const std::string& searchMo
 
     TableData* base = tableById(schema->id);
     const bool noOverlay = txn_.tables.find(schema->id) == txn_.tables.end();
-    std::vector<int8_t> querySketch;
+    const bool cachedScan = base && base->cached && noOverlay;
+    std::vector<uint8_t> querySketch;
+    [[maybe_unused]] int32_t querySketchNorm = 0;
+    double querySketchError = 0;
     double sketchCutoff = 0;
     auto refreshSketchCutoff = [&]() {
         if (querySketch.empty() || heap.size() < k) return;
         const double band = heap.top().dist / base->sketchScale;
-        const double upper = (band + std::sqrt(static_cast<double>(querySketch.size()))) * (1 + 1e-10);
+        const double upper = (band + base->sketchError + querySketchError) * (1 + 1e-10);
         sketchCutoff = upper * upper;
     };
 #if defined(__AVX2__) && defined(__FMA__)
-    if (topk && base && base->cached && noOverlay && base->rows.size() >= 512) {
+    if (topk && cachedScan && base->rows.size() >= 512) {
         const size_t dim = order[0].vec.size();
         if (dim >= 32 && dim <= 4096 && base->rows.size() <= base->vectorSketch.max_size() / dim) {
             if (!base->sketchValid) buildSketch(*base, static_cast<size_t>(order[0].col), dim);
@@ -899,8 +916,12 @@ QueryResult Engine::execSelect(const SelectStmt& st, const std::string& searchMo
                 for (float value : order[0].vec) {
                     const double scaled = static_cast<double>(value) / base->sketchScale;
                     if (std::fabs(scaled) > 127) { querySketch.clear(); break; }
-                    querySketch.push_back(static_cast<int8_t>(std::nearbyint(scaled)));
+                    const int rounded = static_cast<int>(std::nearbyint(scaled));
+                    querySketch.push_back(static_cast<uint8_t>(rounded + 128));
+                    querySketchNorm += rounded * rounded;
+                    querySketchError += (scaled - rounded) * (scaled - rounded);
                 }
+                querySketchError = std::sqrt(querySketchError) * (1 + 1e-10);
             }
         }
     }
@@ -917,33 +938,32 @@ QueryResult Engine::execSelect(const SelectStmt& st, const std::string& searchMo
 
     auto process = [&](const Row& row) {
         if (hasWhere && !passPreds(preds, row)) return;
-        int64_t pk = row[static_cast<size_t>(schema->pk)].i;
         if (topk) {
 #if defined(__AVX2__) && defined(__FMA__)
             if (!querySketch.empty() && heap.size() >= k) {
                 const size_t pos = static_cast<size_t>(&row - base->rows.data());
-                if (sketchDistance(base->vectorSketch.data() + pos * querySketch.size(),
-                                   querySketch.data(), querySketch.size()) > sketchCutoff) return;
+                const int32_t quantizedDistance = base->sketchBias[pos] + querySketchNorm -
+                    4 * sketchDot(base->vectorSketch.data() + pos * querySketch.size(),
+                                  querySketch.data(), querySketch.size());
+                if (quantizedDistance > sketchCutoff) return;
             }
 #endif
             double d;
             if (!measure(row[static_cast<size_t>(order[0].col)].v.data(), order[0].vec, d)) return;
+            const int64_t pk = row[static_cast<size_t>(schema->pk)].i;
             if (heap.size() < k || (d < heap.top().dist || (d == heap.top().dist && pk < heap.top().pk))) {
                 Cand c;
                 c.pk = pk;
                 c.dist = d;
-                c.vals = project(row);
-                SortKey sk;
-                sk.kind = 2;
-                sk.d = d;
-                c.keys.push_back(std::move(sk));
+                if (cachedScan) c.cachedRow = &row;
+                else c.vals = project(row);
                 if (heap.size() >= k && k > 0) heap.pop();
                 if (k > 0) heap.push(std::move(c));
                 refreshSketchCutoff();
             }
         } else {
             Cand c;
-            c.pk = pk;
+            c.pk = row[static_cast<size_t>(schema->pk)].i;
             c.vals = project(row);
             if (!order.empty()) c.keys = buildKeys(row);
             all.push_back(std::move(c));
@@ -951,7 +971,7 @@ QueryResult Engine::execSelect(const SelectStmt& st, const std::string& searchMo
     };
 
     bool earlyLimit = st.hasLimit && order.empty() && limit > 0;
-    if (base && base->cached && noOverlay) {
+    if (cachedScan) {
         const auto equality = std::find_if(preds.begin(), preds.end(), [](const Pred& p) {
             return p.op == 0;
         });
@@ -1005,7 +1025,9 @@ QueryResult Engine::execSelect(const SelectStmt& st, const std::string& searchMo
         }
         return a.pk < b.pk;
     };
-    if (order.empty()) {
+    if (topk) {
+        std::sort(all.begin(), all.end(), better);
+    } else if (order.empty()) {
         std::sort(all.begin(), all.end(), [](const Cand& a, const Cand& b) { return a.pk < b.pk; });
     } else {
         std::sort(all.begin(), all.end(), lessCand);
@@ -1018,7 +1040,10 @@ QueryResult Engine::execSelect(const SelectStmt& st, const std::string& searchMo
     r.hasRows = true;
     for (const ItemPlan& p : items) r.columns.push_back(p.name);
     r.rows.reserve(all.size());
-    for (Cand& c : all) r.rows.push_back(std::move(c.vals));
+    for (Cand& c : all) {
+        if (c.cachedRow) r.rows.push_back(project(*c.cachedRow));
+        else r.rows.push_back(std::move(c.vals));
+    }
     return r;
 }
 

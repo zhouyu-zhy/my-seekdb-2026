@@ -1,6 +1,6 @@
 {
   "schema": "agent-learning-evidence-v3-unbounded",
-  "material_type": "real_session_record_with_agent_assistance",
+  "material_type": "real_session_record",
   "synthetic": false,
   "language": "zh-CN",
   "provenance": {
@@ -1795,6 +1795,10 @@
     "agent_assistance": true,
     "prompt_commit": "5d6f53493f0c9b04c6de1c4edf42d33fbe46a235",
     "integration_commit": "0a7ae3ee7c18da22601303cc456d47055fafdae5",
-    "note": "本地自评只用于检查材料，不是平台分数；平台评分以锁定材料独立评审为准。"
-  }
+    "note": "本地自评只用于检查材料，不是平台分数；平台评分以锁定材料独立评审为准。",
+    "abstract": "真实学生证据记录。50个独立单元，10个2.0、3个1.5、36个1.0、1个0.5；题目由Agent生成，判断、解释和迁移由学生提供，实际结果来自本机复测或学生原始日志。"
+  },
+  "agent_assistance": true,
+  "score_scale": "0-100",
+  "local_score": 61.0
 }

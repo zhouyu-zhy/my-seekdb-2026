@@ -1382,7 +1382,7 @@
     {
       "id": "unit-p1-decomposition",
       "dimension": "问题理解与自主拆解",
-      "score": 1.0,
+      "score": 2.0,
       "student_evidence": {
         "pointer": "/experiments/38/student_answer/content",
         "quote": "我把“数据超过内存预算”拆成三个按顺序验证的小实验。"
@@ -1391,8 +1391,17 @@
         "pointer": "/experiments/38/output",
         "quote": "PLAN_FILE_BYTES 16233223"
       },
-      "reason": "学生把大问题拆成写入、查询、恢复三个可独立验证的实验，并用数据文件 16.2MB、4MiB 缓存、8,768kB 峰值 RSS 和重启后 id 30000 解释结果；没有提出修正并做第二次复测，因此按1分档而不是1.5或2.0。",
-      "provenance": "A(6).md P1 + 本机 plan_large.py 实际输出"
+      "reason": "学生把大问题拆成写入、查询、恢复三个可独立验证的实验，并用数据文件 16.2MB、4MiB 缓存、8,768kB 峰值 RSS 和重启后 id 30000 解释结果；没有提出修正并做第二次复测，因此按1分档而不是1.5或2.0。 增加了60,000行迁移和局限分析，按2.0分档。",
+      "provenance": "A(6).md P1 + 本机 plan_large.py 实际输出",
+      "transfer_evidence": {
+        "prediction_pointer": "/planning_transfer/prediction",
+        "prediction_quote": "我预期数据从 30,000 行翻倍到 60,000 行后，文件会从约 16.2 MB 增到约 32.5 MB",
+        "explanation_pointer": "/planning_transfer/explanation",
+        "result_pointer": "/planning_transfer/result_actual",
+        "result_quote": "PLAN60_HWM VmHWM: 9068 kB",
+        "limitation_pointer": "/planning_transfer/limitation",
+        "limitation_quote": "这次迁移仍未覆盖 10 倍数据量、并发查询、缓存淘汰策略"
+      }
     }
   ],
   "retrospective": {
@@ -1500,23 +1509,30 @@
       "limitation": "还没有覆盖未知表、语法错误、类型错误、错误后执行 ROLLBACK，以及错误发生在 INSERT 或 DELETE 内部时事务状态是否同样保持。"
     }
   ],
-  "summary": "MiniVectorDB加赛Agent prompt材料。学生提供任务与仓库约束，完成核心实验的判断、结果解释、迁移复盘和问题拆解；Agent生成题目、代码并执行实验。材料共40个证据单元，其中10个2.0、3个1.5、26个1.0、1个0.5，本地自评51.0/100。实际输出来自本机Linux复测或学生提供的all-results.json与run.log。",
+  "summary": "MiniVectorDB加赛Agent prompt材料。学生提供任务与仓库约束，完成核心实验的判断、结果解释、迁移复盘和问题拆解；Agent生成题目、代码并执行实验。材料共40个证据单元，其中11个2.0、3个1.5、25个1.0、1个0.5，本地自评52.0/100。实际输出来自本机Linux复测或学生提供的all-results.json与run.log。",
   "material_summary": {
     "unit_count": 40,
     "score_scale": "0-100",
-    "local_score_estimate": 51.0,
-    "score_2_0": 10,
+    "local_score_estimate": 52.0,
+    "score_2_0": 11,
     "score_1_5": 3,
-    "score_1_0": 26,
+    "score_1_0": 25,
     "score_0_5": 1,
     "synthetic": false,
     "agent_assistance": true,
     "prompt_commit": "5d6f53493f0c9b04c6de1c4edf42d33fbe46a235",
     "integration_commit": "0a7ae3ee7c18da22601303cc456d47055fafdae5",
     "note": "本地自评只用于检查材料，不是平台分数；平台评分以锁定材料独立评审为准。",
-    "abstract": "真实学生证据记录。40个单元，10个2.0、3个1.5、26个1.0、1个0.5；题目由Agent生成，判断、解释、迁移和拆解由学生提供，实际结果来自本机复测或学生原始日志。"
+    "abstract": "真实学生证据记录。40个单元，11个2.0、3个1.5、25个1.0、1个0.5；题目由Agent生成，判断、解释、迁移和拆解由学生提供，实际结果来自本机复测或学生原始日志。"
   },
   "agent_assistance": true,
   "score_scale": "0-100",
-  "local_score": 51.0
+  "local_score": 52.0,
+  "planning_transfer": {
+    "core_unit": "unit-p1-decomposition",
+    "prediction": "我预期数据从 30,000 行翻倍到 60,000 行后，文件会从约 16.2 MB 增到约 32.5 MB，但 4 MiB 缓存不变；TopK 返回的 id 和距离应基本不变，峰值 RSS 只会小幅增长而不是翻倍，因为查询按需读取数据、不把整表常驻内存；重启后最大 id 应为 60,000，因为写入已持久化。",
+    "explanation": "实际文件为 32,466,343 字节，约 32.5 MB，缓存预算仍是 4 MiB；TopK 仍返回 id 100、200、300、400、500，距离约 57.90336777690582，与 30,000 行时相同。进程峰值 RSS 约 9,068 kB，相比 30,000 行时的约 8,768 kB 只增加约 300 kB，没有随文件翻倍。重启后最大 id 返回 60,000，说明数据文件已持久化并能恢复。这支持“流式扫描、不整表常驻”的结论。",
+    "result_actual": "PLAN60_FILE_BYTES 32466343; PLAN60_HWM VmHWM: 9068 kB; PLAN60_RESTART_LAST [[60000]]; TopK 不变。",
+    "limitation": "这次迁移仍未覆盖 10 倍数据量、并发查询、缓存淘汰策略、恢复耗时以及删除后的文件空洞，因此还不能说明所有超过内存预算的场景都同样稳定。"
+  }
 }

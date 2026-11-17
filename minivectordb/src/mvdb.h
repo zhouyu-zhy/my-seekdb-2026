@@ -195,7 +195,8 @@ struct Statement {
 };
 
 Statement parseStatement(const std::string& sql);
-std::vector<double> parseVectorText(const std::string& text);
+std::vector<double> parseVectorText(const std::string& text, size_t expectedSize = 0);
+std::vector<float> parseVectorTextFloat(const std::string& text, size_t expectedSize = 0);
 
 // ---------------------------------------------------------------------------
 // Storage / execution engine
@@ -230,8 +231,51 @@ struct TableData {
     std::vector<uint32_t> filterOrder;
     bool sketchValid = false;
     double sketchScale = 0;
+    double sketchError = 0;
     std::vector<int8_t> vectorSketch;
+    std::vector<int32_t> sketchBias;
+
+    // TopK scan cache for the single VECTOR column.  Rows keep the
+    // authoritative values; this cache mirrors them in slot order as 7-bit
+    // codes plus a contiguous float32 copy, so a scan reads 128 bytes per row
+    // instead of chasing one allocation per row.  It is built lazily on the
+    // first exact TopK query and maintained by the storage layer, so a write
+    // never forces a rebuild.
+    bool scanValid = false;
+    bool scanSafe = true;  // values fit the float32 rescore and 7-bit codes
+    int scanVec = -1;
+    uint32_t scanDim = 0;
+    float scanScale = 1.0f;         // value = scale * code
+    std::vector<uint8_t> scanQ;     // rows * scanDim, code + 63
+    std::vector<int32_t> scanNorm;  // sum of squared codes
+    std::vector<int64_t> scanPk;    // primary key per slot
+    // Frame offset of each slot in the active data file.  The float32 values
+    // are read back from the read-only mapping instead of a second copy.
+    std::vector<uint32_t> scanOff;
+    const uint8_t* mapBase = nullptr;  // mmap of the active file, borrowed
+    size_t mapSize = 0;
+    // Equality codes for one filter column, parallel to the row slots.
+    int codeCol = -1;
+    bool codeIsInt = true;
+    std::vector<int32_t> codes;
+    std::unordered_map<int64_t, int32_t> intCodes;
+    std::unordered_map<std::string, int32_t> strCodes;
 };
+
+struct TopKHit {
+    uint32_t slot = 0;
+    double dist = 0;
+};
+
+enum class ScanStatus {
+    OK,          // hits are the exact answer
+    UNAVAILABLE, // no usable scan cache for this table/query
+    NEED_EXACT   // the shortlist could not be proven, use the exact executor
+};
+
+bool vectorComponentsFloatSafe(const float* v, size_t n);
+ScanStatus scanVectorTopK(const TableData& table, const float* query, size_t k,
+                          const int32_t* codes, int32_t code, std::vector<TopKHit>& out);
 
 struct OverlayEntry {
     bool deleted = false;
@@ -270,6 +314,8 @@ private:
     void openActiveFile();
     void reopenReadFile();
     void closeFiles();
+    void mapActive();
+    void unmapActive();
     FILE* openRead();
     void appendBlock(const std::vector<uint8_t>& payload, uint64_t* blockStart,
                      uint64_t* payloadStart);
@@ -278,8 +324,9 @@ private:
     uint64_t liveBytesTotal() const;
 
     // payload encoding / replay
-    void buildPayload(std::vector<uint8_t>& payload);
-    void applyPayload(const std::vector<uint8_t>& payload, uint64_t payloadOffset);
+    void buildPayload(std::vector<uint8_t>& payload, std::vector<Row*>& upserts);
+    void applyPayload(const std::vector<uint8_t>& payload, uint64_t payloadOffset,
+                      const std::vector<Row*>* committedRows = nullptr);
     void applyUpsertRow(uint32_t tableId, Row& row, uint64_t off, uint32_t bodySize);
     void applyUpsertRef(uint32_t tableId, int64_t pk, uint64_t off, uint32_t bodySize);
     void applyDelete(uint32_t tableId, int64_t pk);
@@ -301,9 +348,23 @@ private:
     TableData* tableById(uint32_t id);
     bool pendingTable(uint32_t id) const;
     bool lookupRow(uint32_t tableId, int64_t pk, Row& out);
+    bool pkExists(uint32_t tableId, int64_t pk);
     void scanRows(uint32_t tableId, const std::function<bool(const Row&)>& fn);
     void maybeCache(TableData& table);
     void dropCache(TableData& table);
+    void evictRows(TableData& table);
+
+    // columnar TopK scan cache
+    bool ensureScanIndex(TableData& t, int vecCol);
+    bool buildScanIndexFromStorage(TableData& t, int vecCol);
+    void ensureFilterCodes(TableData& t, int col, bool isInt);
+    bool filterCode(const TableData& t, int type, int64_t i, const std::string& s,
+                    int32_t& code) const;
+    int32_t codeForValue(TableData& t, const Value& v);
+    void touchScanRow(TableData& t, size_t slot, const Row& row, uint32_t frameOff);
+    void moveScanRow(TableData& t, size_t from, size_t to);
+    void popScanRow(TableData& t);
+    void resetScanIndex(TableData& t);
 
     // statements
     QueryResult execCreateTable(const CreateTableStmt& st);
@@ -323,6 +384,8 @@ private:
     uint64_t epoch_ = 0;
     FILE* wal_ = nullptr;
     FILE* readFp_ = nullptr;
+    const uint8_t* map_ = nullptr;   // read-only mapping of the active data file
+    size_t mapSize_ = 0;
     uint64_t walSize_ = 0;
     uint64_t nextTxnId_ = 1;
     uint64_t nextTableId_ = 1;
@@ -339,6 +402,9 @@ uint32_t crc32(const uint8_t* data, size_t len);
 uint64_t rowBodySize(const TableSchema& schema, const Row& row);
 void encodeRowBody(const TableSchema& schema, const Row& row, std::vector<uint8_t>& out);
 Row decodeRowBody(const TableSchema& schema, const uint8_t*& p, const uint8_t* end);
+// Locate the float32 payload of the vector column inside an in-memory frame.
+// Returns nullptr when the frame does not hold exactly that column width.
+const float* rowVectorInFrame(const TableSchema& schema, const uint8_t* frame, size_t frameSize);
 void encodeSchema(const TableSchema& schema, std::vector<uint8_t>& out);
 TableSchema decodeSchema(const uint8_t*& p, const uint8_t* end);
 std::string joinPath(const std::string& dir, const std::string& name);

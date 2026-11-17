@@ -1,0 +1,213 @@
+{
+  "parameters": {
+    "baseline": "/home/fengmijv/mvdb/base0/minivectordb/minivectordb-avx2",
+    "candidate": "./minivectordb-avx2",
+    "rounds": 3,
+    "rows": 10000,
+    "dim": 128,
+    "queries": 1000,
+    "seed": 920026,
+    "output": "/mnt/e/ob/mvdb-perf/minivectordb/tests/results/2026-11-17-performance/paired-benchmark-v2.json"
+  },
+  "samples": [
+    {
+      "round": 1,
+      "label": "baseline",
+      "write": {
+        "wall_sec": 0.49496563200045784,
+        "read_bytes": 0,
+        "write_bytes": 5881856,
+        "cpu_sec": 0.06,
+        "peak_rss_kib": 13264
+      },
+      "cold_query": {
+        "wall_sec": 0.0034084489998349454,
+        "read_bytes": 0,
+        "write_bytes": 0,
+        "cpu_sec": 0.010000000000000009,
+        "peak_rss_kib": 14636
+      },
+      "query": {
+        "wall_sec": 0.15221109399954003,
+        "read_bytes": 0,
+        "write_bytes": 0,
+        "cpu_sec": 0.12,
+        "peak_rss_kib": 14636
+      }
+    },
+    {
+      "round": 1,
+      "label": "candidate",
+      "write": {
+        "wall_sec": 0.05634275400007027,
+        "read_bytes": 0,
+        "write_bytes": 5472256,
+        "cpu_sec": 0.04,
+        "peak_rss_kib": 13172
+      },
+      "cold_query": {
+        "wall_sec": 0.007811370000126772,
+        "read_bytes": 0,
+        "write_bytes": 0,
+        "cpu_sec": 0.019999999999999997,
+        "peak_rss_kib": 19372
+      },
+      "query": {
+        "wall_sec": 0.12926608700036013,
+        "read_bytes": 0,
+        "write_bytes": 0,
+        "cpu_sec": 0.09,
+        "peak_rss_kib": 19372
+      }
+    },
+    {
+      "round": 2,
+      "label": "candidate",
+      "write": {
+        "wall_sec": 0.05425662600009673,
+        "read_bytes": 0,
+        "write_bytes": 5472256,
+        "cpu_sec": 0.05,
+        "peak_rss_kib": 13140
+      },
+      "cold_query": {
+        "wall_sec": 0.0065198979991691886,
+        "read_bytes": 0,
+        "write_bytes": 0,
+        "cpu_sec": 0.009999999999999995,
+        "peak_rss_kib": 19424
+      },
+      "query": {
+        "wall_sec": 0.12751352499981294,
+        "read_bytes": 0,
+        "write_bytes": 0,
+        "cpu_sec": 0.08000000000000002,
+        "peak_rss_kib": 19424
+      }
+    },
+    {
+      "round": 2,
+      "label": "baseline",
+      "write": {
+        "wall_sec": 0.4940362859997549,
+        "read_bytes": 0,
+        "write_bytes": 5881856,
+        "cpu_sec": 0.06,
+        "peak_rss_kib": 13084
+      },
+      "cold_query": {
+        "wall_sec": 0.003527930999553064,
+        "read_bytes": 0,
+        "write_bytes": 0,
+        "cpu_sec": 0.0,
+        "peak_rss_kib": 14456
+      },
+      "query": {
+        "wall_sec": 0.1530871599998136,
+        "read_bytes": 0,
+        "write_bytes": 0,
+        "cpu_sec": 0.12,
+        "peak_rss_kib": 14456
+      }
+    },
+    {
+      "round": 3,
+      "label": "baseline",
+      "write": {
+        "wall_sec": 0.4928484219999518,
+        "read_bytes": 0,
+        "write_bytes": 5881856,
+        "cpu_sec": 0.06,
+        "peak_rss_kib": 13128
+      },
+      "cold_query": {
+        "wall_sec": 0.003569710999727249,
+        "read_bytes": 0,
+        "write_bytes": 0,
+        "cpu_sec": 0.010000000000000009,
+        "peak_rss_kib": 14496
+      },
+      "query": {
+        "wall_sec": 0.14191335400028038,
+        "read_bytes": 0,
+        "write_bytes": 0,
+        "cpu_sec": 0.1,
+        "peak_rss_kib": 14496
+      }
+    },
+    {
+      "round": 3,
+      "label": "candidate",
+      "write": {
+        "wall_sec": 0.05398576300012792,
+        "read_bytes": 0,
+        "write_bytes": 5472256,
+        "cpu_sec": 0.05,
+        "peak_rss_kib": 13212
+      },
+      "cold_query": {
+        "wall_sec": 0.007444507999935013,
+        "read_bytes": 0,
+        "write_bytes": 0,
+        "cpu_sec": 0.009999999999999995,
+        "peak_rss_kib": 19492
+      },
+      "query": {
+        "wall_sec": 0.12641083599919511,
+        "read_bytes": 0,
+        "write_bytes": 0,
+        "cpu_sec": 0.08000000000000002,
+        "peak_rss_kib": 19492
+      }
+    }
+  ],
+  "medians": {
+    "baseline": {
+      "write": {
+        "wall_sec": 0.4940362859997549,
+        "read_bytes": 0,
+        "write_bytes": 5881856,
+        "cpu_sec": 0.06,
+        "peak_rss_kib": 13128
+      },
+      "cold_query": {
+        "wall_sec": 0.003527930999553064,
+        "read_bytes": 0,
+        "write_bytes": 0,
+        "cpu_sec": 0.010000000000000009,
+        "peak_rss_kib": 14496
+      },
+      "query": {
+        "wall_sec": 0.15221109399954003,
+        "read_bytes": 0,
+        "write_bytes": 0,
+        "cpu_sec": 0.12,
+        "peak_rss_kib": 14496
+      }
+    },
+    "candidate": {
+      "write": {
+        "wall_sec": 0.05425662600009673,
+        "read_bytes": 0,
+        "write_bytes": 5472256,
+        "cpu_sec": 0.05,
+        "peak_rss_kib": 13172
+      },
+      "cold_query": {
+        "wall_sec": 0.007444507999935013,
+        "read_bytes": 0,
+        "write_bytes": 0,
+        "cpu_sec": 0.009999999999999995,
+        "peak_rss_kib": 19424
+      },
+      "query": {
+        "wall_sec": 0.12751352499981294,
+        "read_bytes": 0,
+        "write_bytes": 0,
+        "cpu_sec": 0.08000000000000002,
+        "peak_rss_kib": 19424
+      }
+    }
+  },
+  "all_exact_responses_match": true
+}

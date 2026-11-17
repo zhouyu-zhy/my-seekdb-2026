@@ -81,11 +81,15 @@ engine itself runs the TopK query in 53 us against 76 us for the base.
   torn WAL tails, interrupted recovery under a 64 MiB address-space cap, and
   identical WAL bytes plus bidirectional old/new recovery.
 - `tests/check_simd_boundaries.py` passes for 16 dimension sizes.
-- The official `protocol_check/run.py` passes all 20 public cases (native
-  command mode; the Docker image still needs the owner's final run).
+- `tests/oracle_fuzz.py` is a randomised differential test against an
+  independent Python oracle written from the task text (not from this
+  implementation): CRUD, WHERE with =/</<=/>/>= and AND, ORDER BY ascending
+  and descending, LIMIT, filtered and unfiltered TopK with exact distances,
+  BEGIN/COMMIT/ROLLBACK with in-transaction visibility, and a restart
+  persistence check. Ten seeds x 200 statements: 0 mismatches.
+- The official `protocol_check/run.py` passes all 20 public cases against the
+  built image (`docker build`, then `--image`), which also exercises the
+  read-only root filesystem, `--network=none` and `--pids-limit=128`.
 - A standalone harness (`tests/` does not ship it) compared 50 random queries
   over 10,000 x 128 rows against a brute-force double scan: 0 mismatches and
   0 fallbacks.
-
-The merged commit still requires the owner's final Docker/public-case run
-before the single submission.

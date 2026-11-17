@@ -23,7 +23,8 @@ RUN apt-get update \
 
 COPY --from=build /src/minivectordb* /app/
 COPY --from=build /src/docker-entrypoint.sh /app/docker-entrypoint.sh
-RUN chmod 0755 /app/docker-entrypoint.sh && chmod 0755 /app/minivectordb*
+RUN sed -i 's/\r$//' /app/docker-entrypoint.sh \
+    && chmod 0755 /app/docker-entrypoint.sh && chmod 0755 /app/minivectordb*
 
 WORKDIR /app
 VOLUME ["/data"]

@@ -102,6 +102,7 @@ def vectors(binaries):
                     for start in range(0, 520, 40):
                         db.sql("INSERT INTO t VALUES " + ",".join(
                             f"({i},'g{i%3}',{literal(data[i])})" for i in range(start, min(start+40, 520))))
+                    db.sql("CREATE VECTOR INDEX ix ON t(v)")
                     results = [db.sql(sql) for sql in sql_queries]
                     for truth, rows in zip(expected, results):
                         assert [i for _, i in truth] == [r[0] for r in rows], (dim, scale, binary, truth, rows)

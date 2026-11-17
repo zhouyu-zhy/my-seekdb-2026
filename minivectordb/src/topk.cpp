@@ -204,7 +204,8 @@ ScanStatus scanVectorTopK(const TableData& table, const float* query, size_t k,
     if (!std::isfinite(maxAbs) || maxAbs > 1e18f) return ScanStatus::UNAVAILABLE;
     const double qScale = maxAbs > 0 ? static_cast<double>(maxAbs) / 127.0 : 1.0;
 
-    std::vector<uint8_t> qb(dim);
+    thread_local std::vector<uint8_t> qb;
+    qb.resize(dim);
     double normQ = 0;
     int64_t sumQ = 0;
     for (size_t i = 0; i < dim; ++i) {
@@ -222,7 +223,7 @@ ScanStatus scanVectorTopK(const TableData& table, const float* query, size_t k,
     const double offset = lambda * static_cast<double>(kCodeLimit) * static_cast<double>(sumQ);
     const double qNormTerm = ratio * ratio * normQ;
 
-    const size_t keep = std::min(rows, std::max<size_t>(128, 4 * k + 32));
+    const size_t keep = std::min(rows, std::max<size_t>(48, 2 * k + 16));
     const size_t cap = std::min(rows, 2 * keep);
 
     if (table.mapBase == nullptr || table.mapSize == 0) return ScanStatus::UNAVAILABLE;
@@ -264,8 +265,21 @@ ScanStatus scanVectorTopK(const TableData& table, const float* query, size_t k,
     auto push = [&](int32_t biased, int32_t norm, size_t slot) { pushScore(score(biased, norm), slot); };
 
     if (codes) {
+        uint32_t slots[4];
+        size_t pending = 0;
         for (size_t slot = 0; slot < rows; ++slot) {
-            if (static_cast<int32_t>(codes[slot]) != code) continue;
+            if (codes[slot] != code) continue;
+            slots[pending++] = static_cast<uint32_t>(slot);
+            if (pending == 4) {
+                int32_t dots[4] = {0, 0, 0, 0};
+                dotCodes4(qb.data(), qrows + slots[0] * dim, qrows + slots[1] * dim,
+                          qrows + slots[2] * dim, qrows + slots[3] * dim, dim, dots);
+                for (size_t j = 0; j < 4; ++j) push(dots[j], norms[slots[j]], slots[j]);
+                pending = 0;
+            }
+        }
+        for (size_t j = 0; j < pending; ++j) {
+            const size_t slot = slots[j];
             push(dotCodes1(qb.data(), qrows + slot * dim, dim), norms[slot], slot);
         }
     } else {
@@ -302,7 +316,8 @@ ScanStatus scanVectorTopK(const TableData& table, const float* query, size_t k,
 
     // Rescore the shortlist with the float32 kernel, then the best rows with
     // the reference double kernel.
-    std::vector<FloatHit> floats;
+    thread_local std::vector<FloatHit> floats;
+    floats.clear();
     floats.reserve(cand.size());
     const size_t exactCount = std::min(cand.size(), k + 16);
     // The float32 values live in the read-only mapping of the data file, so the
@@ -317,12 +332,15 @@ ScanStatus scanVectorTopK(const TableData& table, const float* query, size_t k,
         if (v == nullptr) return ScanStatus::UNAVAILABLE;
         floats.push_back(FloatHit{l2sq(v, query, dim), pks[c.slot], c.slot});
     }
+    double floatExcluded = std::numeric_limits<double>::infinity();
     if (floats.size() > exactCount) {
         std::nth_element(floats.begin(), floats.begin() + static_cast<ptrdiff_t>(exactCount), floats.end(),
                          floatLess);
+        floatExcluded = floats[exactCount].d;
         floats.resize(exactCount);
     }
-    std::vector<ExactHit> exact;
+    thread_local std::vector<ExactHit> exact;
+    exact.clear();
     exact.reserve(floats.size());
     for (const FloatHit& f : floats) {
         const float* v = vecOf(static_cast<uint32_t>(f.slot));
@@ -337,8 +355,11 @@ ScanStatus scanVectorTopK(const TableData& table, const float* query, size_t k,
         exact.resize(k);
     }
 
-    // A table that fit the collection buffer kept every row: nothing was
-    // excluded, so the shortlist result needs no bound.
+    if (std::isfinite(floatExcluded) && !exact.empty()) {
+        const double slack = (static_cast<double>(dim) + 16) * 4 * std::numeric_limits<float>::epsilon();
+        const double lower = (floatExcluded - static_cast<double>(dim) * 1e-36) / (1 + slack);
+        if (!(exact.back().d * exact.back().d < lower)) return ScanStatus::NEED_EXACT;
+    }
     if (!compacted) {
         out.reserve(exact.size());
         for (const ExactHit& e : exact) out.push_back(TopKHit{e.slot, e.d});

@@ -660,6 +660,23 @@ void Engine::buildPayload(std::vector<uint8_t>& payload, std::vector<Row*>& upse
         pks.reserve(ot->second.entries.size());
         for (const auto& kv : ot->second.entries) pks.push_back(kv.first);
         std::sort(pks.begin(), pks.end());
+        const TableSchema* schema = nullptr;
+        auto table = tables_.find(tableId);
+        if (table != tables_.end()) schema = &table->second->schema;
+        else {
+            for (const TableSchema& s : txn_.newTables) {
+                if (s.id == tableId) { schema = &s; break; }
+            }
+        }
+        if (!schema) fail("internal_error", "row for unknown table");
+        size_t bytes = payload.size();
+        size_t rowCount = upserts.size();
+        for (const auto& kv : ot->second.entries) {
+            bytes += kv.second.deleted ? 17 : 9 + rowBodySize(*schema, kv.second.row);
+            rowCount += !kv.second.deleted;
+        }
+        payload.reserve(bytes);
+        upserts.reserve(rowCount);
         for (int64_t pk : pks) {
             OverlayEntry& e = ot->second.entries.at(pk);
             if (e.deleted) {
@@ -668,16 +685,6 @@ void Engine::buildPayload(std::vector<uint8_t>& payload, std::vector<Row*>& upse
                     putI64(payload, pk);
                 });
             } else {
-                const TableSchema* schema = nullptr;
-                auto existing = tables_.find(tableId);
-                if (existing != tables_.end()) {
-                    schema = &existing->second->schema;
-                } else {
-                    for (const TableSchema& s : txn_.newTables) {
-                        if (s.id == tableId) { schema = &s; break; }
-                    }
-                }
-                if (!schema) fail("internal_error", "row for unknown table");
                 appendFrame(OP_UPSERT, [&]() {
                     putU32(payload, tableId);
                     encodeRowBody(*schema, e.row, payload);

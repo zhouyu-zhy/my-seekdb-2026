@@ -41,7 +41,7 @@
 #define SK_CHUNK 1024
 #endif
 #ifndef SK_SEARCH_WIDTH
-#define SK_SEARCH_WIDTH 24
+#define SK_SEARCH_WIDTH 28
 #endif
 #ifndef SK_ITOPK
 #define SK_ITOPK 512

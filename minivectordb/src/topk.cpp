@@ -33,14 +33,8 @@ constexpr int kCodeLimit = 63;  // signed 7-bit codes keep byte dots in int16
 
 struct Cand {
     double score = 0;  // quantized distance without the constant query term
-    int64_t pk = 0;
     uint32_t slot = 0;
 };
-
-bool candLess(const Cand& a, const Cand& b) {
-    if (a.score != b.score) return a.score < b.score;
-    return a.pk < b.pk;
-}
 
 struct FloatHit {
     float d = 0;
@@ -197,20 +191,19 @@ ScanStatus scanVectorTopK(const TableData& table, const float* query, size_t k,
     std::vector<Cand> cand(cap + 1);
     Cand* buffer = cand.data();
     double thrScore = std::numeric_limits<double>::infinity();
-    int64_t thrPk = std::numeric_limits<int64_t>::max();
     size_t count = 0;
     bool compacted = false;
     auto score = [&](int32_t biased, int32_t norm) {
         return static_cast<double>(norm) - lambda * static_cast<double>(biased);
     };
-    auto push = [&](int32_t biased, int32_t norm, size_t slot) {
-        const double s = score(biased, norm);
-        if (!(s < thrScore)) {
-            // Only near-ties need the primary key to settle the order.
-            if (!(s == thrScore && pks[slot] < thrPk)) return;
-        }
+    // The key is only read while compacting, never on the hot path.
+    auto candLess = [&](const Cand& a, const Cand& b) {
+        if (a.score != b.score) return a.score < b.score;
+        return pks[a.slot] < pks[b.slot];
+    };
+    auto pushScore = [&](double s, size_t slot) {
+        if (!(s < thrScore)) return;
         buffer[count].score = s;
-        buffer[count].pk = pks[slot];
         buffer[count].slot = static_cast<uint32_t>(slot);
         ++count;
         if (count >= cap) {
@@ -219,11 +212,11 @@ ScanStatus scanVectorTopK(const TableData& table, const float* query, size_t k,
             // every row that was dropped, so it is the exact cutoff used by
             // both the continued scan and the exclusion proof below.
             thrScore = buffer[keep].score;
-            thrPk = buffer[keep].pk;
             count = keep;
             compacted = true;
         }
     };
+    auto push = [&](int32_t biased, int32_t norm, size_t slot) { pushScore(score(biased, norm), slot); };
 
     if (codes) {
         for (size_t slot = 0; slot < rows; ++slot) {
@@ -232,15 +225,30 @@ ScanStatus scanVectorTopK(const TableData& table, const float* query, size_t k,
         }
     } else {
         size_t slot = 0;
+#if defined(__AVX2__) && defined(__FMA__)
+        // Four scores and one branch per group: the threshold test only keeps
+        // a row when a lane is strictly below it, which is exactly what the
+        // scalar comparison would decide.
+        const __m256d lambdaV = _mm256_set1_pd(lambda);
         for (; slot + 4 <= rows; slot += 4) {
             int32_t d[4] = {0, 0, 0, 0};
             dotCodes4(qb.data(), qrows + slot * dim, qrows + (slot + 1) * dim,
                       qrows + (slot + 2) * dim, qrows + (slot + 3) * dim, dim, d);
-            push(d[0], norms[slot], slot);
-            push(d[1], norms[slot + 1], slot + 1);
-            push(d[2], norms[slot + 2], slot + 2);
-            push(d[3], norms[slot + 3], slot + 3);
+            const __m256d n = _mm256_cvtepi32_pd(_mm_loadu_si128(reinterpret_cast<const __m128i*>(norms + slot)));
+            const __m256d dd = _mm256_cvtepi32_pd(_mm_loadu_si128(reinterpret_cast<const __m128i*>(d)));
+            const __m256d sc = _mm256_sub_pd(n, _mm256_mul_pd(dd, lambdaV));
+            const __m256d thrV = _mm256_set1_pd(thrScore);
+            const int mask = _mm256_movemask_pd(_mm256_cmp_pd(sc, thrV, _CMP_LT_OQ));
+            if (mask) {
+                alignas(32) double sv[4];
+                _mm256_storeu_pd(sv, sc);
+                if (mask & 1) pushScore(sv[0], slot);
+                if (mask & 2) pushScore(sv[1], slot + 1);
+                if (mask & 4) pushScore(sv[2], slot + 2);
+                if (mask & 8) pushScore(sv[3], slot + 3);
+            }
         }
+#endif
         for (; slot < rows; ++slot) {
             push(dotCodes1(qb.data(), qrows + slot * dim, dim), norms[slot], slot);
         }
@@ -254,7 +262,8 @@ ScanStatus scanVectorTopK(const TableData& table, const float* query, size_t k,
     const size_t exactCount = std::min(cand.size(), k + 16);
     const float* fvecs = table.scanVecs.data();
     for (const Cand& c : cand) {
-        floats.push_back(FloatHit{l2sq(fvecs + static_cast<size_t>(c.slot) * dim, query, dim), c.pk, c.slot});
+        floats.push_back(FloatHit{l2sq(fvecs + static_cast<size_t>(c.slot) * dim, query, dim),
+                                  pks[c.slot], c.slot});
     }
     if (floats.size() > exactCount) {
         std::nth_element(floats.begin(), floats.begin() + static_cast<ptrdiff_t>(exactCount), floats.end(),
@@ -268,7 +277,12 @@ ScanStatus scanVectorTopK(const TableData& table, const float* query, size_t k,
             l2DistancePtr(fvecs + static_cast<size_t>(f.slot) * dim, query, dim), f.pk, f.slot});
     }
     std::sort(exact.begin(), exact.end(), exactLess);
-    if (exact.size() > k) exact.resize(k);
+    if (exact.size() > k) {
+        // A tie at the k-th boundary means the shortlist order decides who is
+        // reported, so hand the query back to the general executor.
+        if (exact[k].d == exact[k - 1].d) return ScanStatus::NEED_EXACT;
+        exact.resize(k);
+    }
 
     // A table that fit the collection buffer kept every row: nothing was
     // excluded, so the shortlist result needs no bound.

@@ -792,6 +792,49 @@ std::vector<double> parseVectorText(const std::string& text, size_t expectedSize
     return out;
 }
 
+// Fast path for the plain decimal form [-]<digits>[.<digits>] with at most 18
+// significant digits and no exponent.  The quotient of two exactly
+// representable integers is correctly rounded, so mantissa / 10^fraction
+// equals the value std::from_chars would return; anything else falls back to
+// the general path.
+bool parsePlainDecimal(const char* begin, const char* end, const char*& outEnd, double& out) {
+    const char* p = begin;
+    bool negative = false;
+    if (p < end && (*p == '-' || *p == '+')) {
+        negative = (*p == '-');
+        ++p;
+    }
+    uint64_t mantissa = 0;
+    int digits = 0;
+    int fraction = 0;
+    bool any = false;
+    for (; p < end && *p >= '0' && *p <= '9'; ++p) {
+        if (digits >= 18) return false;
+        mantissa = mantissa * 10 + static_cast<uint64_t>(*p - '0');
+        ++digits;
+        any = true;
+    }
+    if (p < end && *p == '.') {
+        ++p;
+        for (; p < end && *p >= '0' && *p <= '9'; ++p) {
+            if (digits >= 18) return false;
+            mantissa = mantissa * 10 + static_cast<uint64_t>(*p - '0');
+            ++digits;
+            ++fraction;
+            any = true;
+        }
+    }
+    if (!any) return false;
+    // Reject anything that would need the general parser ('e', 'E', 'x', ...).
+    if (p < end && *p != ',' && *p != ']' && !std::isspace(static_cast<unsigned char>(*p))) return false;
+    static const double kPow10[19] = {1e0,  1e1,  1e2,  1e3,  1e4,  1e5,  1e6,  1e7,  1e8,  1e9,
+                                      1e10, 1e11, 1e12, 1e13, 1e14, 1e15, 1e16, 1e17, 1e18};
+    double value = static_cast<double>(mantissa) / kPow10[fraction];
+    out = negative ? -value : value;
+    outEnd = p;
+    return true;
+}
+
 // Same grammar and error codes as parseVectorText, but converts each component
 // to float32 in place and validates the float range while parsing.  The row
 // path uses it to avoid a throw-away vector<double> per row.
@@ -817,18 +860,21 @@ std::vector<float> parseVectorTextFloat(const std::string& text, size_t expected
         if (i >= text.size()) fail("invalid_vector", "unterminated vector literal");
         const char* begin = text.data() + i;
         double d = 0;
-        const auto parsed = std::from_chars(begin, text.data() + text.size(), d);
-        const char* end = parsed.ptr;
-        if (parsed.ec != std::errc{} ||
-            (end < text.data() + text.size() && (*end == 'x' || *end == 'X')) ||
-            (d != 0 && std::fabs(d) < std::numeric_limits<double>::min())) {
-            char* fallbackEnd = nullptr;
-            errno = 0;
-            d = std::strtod(begin, &fallbackEnd);
-            if (fallbackEnd == begin || errno == ERANGE) {
-                fail("invalid_vector", "invalid vector component");
+        const char* end = begin;
+        if (!parsePlainDecimal(begin, text.data() + text.size(), end, d)) {
+            const auto parsed = std::from_chars(begin, text.data() + text.size(), d);
+            end = parsed.ptr;
+            if (parsed.ec != std::errc{} ||
+                (end < text.data() + text.size() && (*end == 'x' || *end == 'X')) ||
+                (d != 0 && std::fabs(d) < std::numeric_limits<double>::min())) {
+                char* fallbackEnd = nullptr;
+                errno = 0;
+                d = std::strtod(begin, &fallbackEnd);
+                if (fallbackEnd == begin || errno == ERANGE) {
+                    fail("invalid_vector", "invalid vector component");
+                }
+                end = fallbackEnd;
             }
-            end = fallbackEnd;
         }
         if (!std::isfinite(d)) fail("invalid_vector", "vector component must be finite");
         if (std::fabs(d) > static_cast<double>(FLT_MAX)) {

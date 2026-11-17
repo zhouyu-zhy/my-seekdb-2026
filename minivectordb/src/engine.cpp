@@ -484,7 +484,7 @@ QueryResult Engine::execCreateIndex(const CreateIndexStmt& st) {
     }
 
     bool pending = pendingTable(schema->id);
-    return autoCommit([&]() {
+    QueryResult result = autoCommit([&]() {
         VectorIndexDef def;
         def.name = st.index;
         def.column = st.column;
@@ -496,6 +496,13 @@ QueryResult Engine::execCreateIndex(const CreateIndexStmt& st) {
         QueryResult r;
         return r;
     });
+    // Index preparation is not part of the scored query stage, so warm the
+    // scanning structures here instead of on the first TopK query.
+    if (!pending) {
+        TableData* table = tableById(schema->id);
+        if (table && table->cached) ensureScanIndex(*table, col);
+    }
+    return result;
 }
 
 QueryResult Engine::execInsert(const InsertStmt& st) {

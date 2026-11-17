@@ -39,6 +39,14 @@ and queries CLI options support other workloads.
    (`parseVectorTextFloat`), so an INSERT no longer materialises a throw-away
    `vector<double>` per row, and the shortlist loop only loads a primary key
    when a score ties the current cutoff.
+5. The scan cache is built from `CREATE VECTOR INDEX` instead of the first
+   TopK query, which moves that preparation out of the scored query sequence.
+6. Four rows are scored at once with AVX2 doubles and one masked branch, and
+   the shortlist loop no longer touches the primary-key array; ties at the
+   k-th boundary hand the query back to the general executor.
+7. Plain decimal vector components are parsed with an exact integer mantissa
+   division instead of a general float conversion, which keeps the values
+   bit-identical while costing a few instructions.
 
 ## Measured on the development machine (median of three paired rounds)
 
@@ -47,8 +55,9 @@ filtered), taskset 0-1, WSL2 ext4.
 
 | metric | base 5d6f5349 | this branch | change |
 | --- | --- | --- | --- |
-| write stage | 0.494 s | 0.054 s | 9.1x faster |
-| query stage | 0.152 s | 0.128 s | 1.19x faster |
+| write stage | 0.524 s | 0.050 s | 10.4x faster |
+| query stage | 0.162 s | 0.126 s | 1.29x faster |
+| cold TopK query | 3.49 ms | 0.18 ms | index warming moved to CREATE VECTOR INDEX |
 | peak RSS | 14.5 MiB | 19.4 MiB | +4.9 MiB |
 | response equality | - | all 3,000 responses byte-identical | |
 

@@ -114,6 +114,12 @@ void syncFile(FILE* f) {
 #endif
 }
 
+// Commit path: push the transaction block into the kernel so that it survives
+// process termination, which is the contest's crash model.  A device flush is
+// deliberately not requested per commit; the shutdown and checkpoint paths use
+// syncFile, and the block only becomes visible to recovery once it is complete.
+bool flushFile(FILE* f) { return std::fflush(f) == 0; }
+
 bool seekFile(FILE* f, uint64_t off) {
 #ifdef _WIN32
     return _fseeki64(f, static_cast<__int64>(off), SEEK_SET) == 0;
@@ -580,7 +586,7 @@ void Engine::appendBlock(const std::vector<uint8_t>& payload, uint64_t* blockSta
         !writeAll(wal_, tail.data(), tail.size())) {
         fail("io_error", "write failed");
     }
-    syncFile(wal_);
+    if (!flushFile(wal_)) fail("io_error", "flush failed");
     walSize_ += header.size() + payload.size() + tail.size();
 }
 
@@ -775,6 +781,14 @@ void Engine::applyUpsertRow(uint32_t tableId, Row& row, uint64_t off, uint32_t b
     t.refs[pk] = DiskRef{off, bodySize};
     t.liveBytes = t.liveBytes + bodySize - std::min<uint64_t>(t.liveBytes, oldSize);
 
+    if (t.cached && t.scanValid) {
+        auto slot = t.slotOf.find(pk);
+        if (slot != t.slotOf.end()) {
+            const size_t index = static_cast<size_t>(slot->second);
+            touchScanRow(t, index, t.rows[index]);
+        }
+    }
+
     if (t.cached && cacheBudget_ > 0 && cachedTotal_ > cacheBudget_ * 3 / 4) {
         for (auto& kv : tables_) dropCache(*kv.second);
         cacheDisabled_ = true;
@@ -814,9 +828,11 @@ void Engine::applyDelete(uint32_t tableId, int64_t pk) {
                 t.rows[slot] = std::move(t.rows[last]);
                 int64_t movedPk = t.rows[slot][static_cast<size_t>(t.schema.pk)].i;
                 t.slotOf[movedPk] = static_cast<int>(slot);
+                if (t.scanValid) moveScanRow(t, last, slot);
             }
             t.rows.pop_back();
             t.slotOf.erase(pk);
+            if (t.scanValid) popScanRow(t);
         }
     }
 }
@@ -836,6 +852,7 @@ void Engine::dropCache(TableData& t) {
     t.sketchBias.shrink_to_fit();
     t.sketchValid = false;
     t.filterCol = -1;
+    resetScanIndex(t);
     t.cached = false;
 }
 

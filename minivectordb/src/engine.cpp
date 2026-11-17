@@ -1,4 +1,5 @@
 #include "mvdb.h"
+#include "distance.h"
 
 #include <algorithm>
 #include <cfloat>
@@ -57,10 +58,13 @@ Value valueForColumn(const Column& c, const Literal& lit) {
         if (utf8Length(lit.s) > c.length) fail("value_too_long", "string exceeds VARCHAR length");
         v.s = lit.s;
     } else {
-        std::vector<double> nums;
         if (lit.kind == Literal::STR) {
-            nums = parseVectorText(lit.s, c.length);
-        } else if (lit.kind == Literal::VECLIT) {
+            v.v = parseVectorTextFloat(lit.s, c.length);
+            if (v.v.size() != c.length) fail("dimension_mismatch", "vector dimension does not match column");
+            return v;
+        }
+        std::vector<double> nums;
+        if (lit.kind == Literal::VECLIT) {
             nums = lit.v;
         } else {
             fail("type_mismatch", "VECTOR requires an array literal");
@@ -94,25 +98,8 @@ std::vector<float> makeQueryVector(const Column& c, const std::vector<double>& n
     return out;
 }
 
-double l2DistancePtr(const float* a, const float* b, size_t n) {
-    size_t i = 0;
-    double s0 = 0, s1 = 0, s2 = 0, s3 = 0;
-    for (; i + 4 <= n; i += 4) {
-        double d0 = static_cast<double>(a[i]) - b[i];
-        double d1 = static_cast<double>(a[i + 1]) - b[i + 1];
-        double d2 = static_cast<double>(a[i + 2]) - b[i + 2];
-        double d3 = static_cast<double>(a[i + 3]) - b[i + 3];
-        s0 += d0 * d0;
-        s1 += d1 * d1;
-        s2 += d2 * d2;
-        s3 += d3 * d3;
-    }
-    double s = s0 + s1 + s2 + s3;
-    for (; i < n; ++i) {
-        double d = static_cast<double>(a[i]) - b[i];
-        s += d * d;
-    }
-    return std::sqrt(s);
+double l2Distance(const std::vector<float>& a, const std::vector<float>& b) {
+    return l2DistancePtr(a.data(), b.data(), a.size());
 }
 
 // The float pass only rejects candidates that are provably above the current
@@ -212,10 +199,6 @@ int32_t sketchDot(const int8_t* a, const uint8_t* b, size_t n)
     return result;
 }
 #endif
-
-double l2Distance(const std::vector<float>& a, const std::vector<float>& b) {
-    return l2DistancePtr(a.data(), b.data(), a.size());
-}
 
 int invertOp(int op) {
     switch (op) {
@@ -896,6 +879,62 @@ QueryResult Engine::execSelect(const SelectStmt& st, const std::string& searchMo
     TableData* base = tableById(schema->id);
     const bool noOverlay = txn_.tables.find(schema->id) == txn_.tables.end();
     const bool cachedScan = base && base->cached && noOverlay;
+
+    // Exact TopK over the quantized columnar scan cache.  Only the common
+    // shape "SELECT <columns>, L2_DISTANCE(v, q) AS d FROM t
+    // [WHERE col = literal] ORDER BY d LIMIT k" on a fully cached table takes
+    // this path; every other shape keeps using the general executor below.
+    if (topk && cachedScan && k > 0 && k < base->rows.size() && k <= 4096 &&
+        schema->vec >= 0 && order[0].col == schema->vec &&
+        order[0].vec.size() == schema->cols[static_cast<size_t>(schema->vec)].length &&
+        vectorComponentsFloatSafe(order[0].vec.data(), order[0].vec.size())) {
+        bool projectionsOk = true;
+        for (const ItemPlan& ip : items) {
+            if (ip.kind == 1 && (ip.col != order[0].col || ip.vec != order[0].vec)) {
+                projectionsOk = false;
+                break;
+            }
+        }
+        bool filterOk = preds.empty();
+        if (!filterOk && preds.size() == 1 && preds[0].op == 0) filterOk = true;
+        if (projectionsOk && filterOk && ensureScanIndex(*base, schema->vec)) {
+            bool filterKnown = true;
+            int32_t filter = 0;
+            if (!preds.empty()) {
+                const Pred& p = preds[0];
+                ensureFilterCodes(*base, p.col, p.type == 0);
+                filterKnown = filterCode(*base, p.type, p.i, p.s, filter);
+            }
+            std::vector<TopKHit> hits;
+            bool haveHits = filterKnown;
+            if (filterKnown) {
+                const ScanStatus status =
+                    scanVectorTopK(*base, order[0].vec.data(), k,
+                                   preds.empty() ? nullptr : base->codes.data(), filter, hits);
+                haveHits = status == ScanStatus::OK;
+            } else {
+                // The equality literal does not occur in this column, so no
+                // row can match; still report the projection columns.
+                QueryResult r;
+                r.hasRows = true;
+                r.columns.reserve(items.size());
+                for (const ItemPlan& ip : items) r.columns.push_back(ip.name);
+                return r;
+            }
+            if (haveHits) {
+                QueryResult r;
+                r.hasRows = true;
+                r.columns.reserve(items.size());
+                for (const ItemPlan& ip : items) r.columns.push_back(ip.name);
+                r.rows.reserve(hits.size());
+                for (const TopKHit& h : hits) {
+                    r.rows.push_back(project(base->rows[static_cast<size_t>(h.slot)]));
+                }
+                return r;
+            }
+        }
+    }
+
     std::vector<uint8_t> querySketch;
     [[maybe_unused]] int32_t querySketchNorm = 0;
     double querySketchError = 0;

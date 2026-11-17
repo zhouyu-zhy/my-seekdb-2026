@@ -196,6 +196,7 @@ struct Statement {
 
 Statement parseStatement(const std::string& sql);
 std::vector<double> parseVectorText(const std::string& text, size_t expectedSize = 0);
+std::vector<float> parseVectorTextFloat(const std::string& text, size_t expectedSize = 0);
 
 // ---------------------------------------------------------------------------
 // Storage / execution engine
@@ -233,7 +234,44 @@ struct TableData {
     double sketchError = 0;
     std::vector<int8_t> vectorSketch;
     std::vector<int32_t> sketchBias;
+
+    // TopK scan cache for the single VECTOR column.  Rows keep the
+    // authoritative values; this cache mirrors them in slot order as 7-bit
+    // codes plus a contiguous float32 copy, so a scan reads 128 bytes per row
+    // instead of chasing one allocation per row.  It is built lazily on the
+    // first exact TopK query and maintained by the storage layer, so a write
+    // never forces a rebuild.
+    bool scanValid = false;
+    bool scanSafe = true;  // values fit the float32 rescore and 7-bit codes
+    int scanVec = -1;
+    uint32_t scanDim = 0;
+    float scanScale = 1.0f;         // value = scale * code
+    std::vector<uint8_t> scanQ;     // rows * scanDim, code + 63
+    std::vector<int32_t> scanNorm;  // sum of squared codes
+    std::vector<int64_t> scanPk;    // primary key per slot
+    std::vector<float> scanVecs;    // contiguous float32 copy for rescoring
+    // Equality codes for one filter column, parallel to the row slots.
+    int codeCol = -1;
+    bool codeIsInt = true;
+    std::vector<int32_t> codes;
+    std::unordered_map<int64_t, int32_t> intCodes;
+    std::unordered_map<std::string, int32_t> strCodes;
 };
+
+struct TopKHit {
+    uint32_t slot = 0;
+    double dist = 0;
+};
+
+enum class ScanStatus {
+    OK,          // hits are the exact answer
+    UNAVAILABLE, // no usable scan cache for this table/query
+    NEED_EXACT   // the shortlist could not be proven, use the exact executor
+};
+
+bool vectorComponentsFloatSafe(const float* v, size_t n);
+ScanStatus scanVectorTopK(const TableData& table, const float* query, size_t k,
+                          const int32_t* codes, int32_t code, std::vector<TopKHit>& out);
 
 struct OverlayEntry {
     bool deleted = false;
@@ -307,6 +345,17 @@ private:
     void scanRows(uint32_t tableId, const std::function<bool(const Row&)>& fn);
     void maybeCache(TableData& table);
     void dropCache(TableData& table);
+
+    // columnar TopK scan cache
+    bool ensureScanIndex(TableData& t, int vecCol);
+    void ensureFilterCodes(TableData& t, int col, bool isInt);
+    bool filterCode(const TableData& t, int type, int64_t i, const std::string& s,
+                    int32_t& code) const;
+    int32_t codeForValue(TableData& t, const Value& v);
+    void touchScanRow(TableData& t, size_t slot, const Row& row);
+    void moveScanRow(TableData& t, size_t from, size_t to);
+    void popScanRow(TableData& t);
+    void resetScanIndex(TableData& t);
 
     // statements
     QueryResult execCreateTable(const CreateTableStmt& st);

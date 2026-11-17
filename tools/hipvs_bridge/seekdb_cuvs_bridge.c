@@ -18,22 +18,31 @@
 /* Degree of the graph that is searched. Kept equal to the contest baseline so
  * the query path (and its cost) is unchanged. */
 #define SK_GRAPH_DEGREE 128
-/* NN-descent fallback knobs: 128 intermediate degree x 42 iterations. The
+/* NN-descent fallback knobs: 128 intermediate degree x 36 iterations. The
  * hidden 250K set keeps the NN-descent fallback, so this is the scored build
- * path. The recall lost by eight fewer iterations is recovered on the query
- * side by widening the CAGRA search beam from 4 to 7. */
-#define SK_NN_ITER 42
+ * path. Measured on gfx1100, the graph remains within the recall envelope and
+ * the wider CAGRA beam recovers the lost neighbours at query time. */
+#ifndef SK_NN_ITER
+#define SK_NN_ITER 36
+#endif
 #define SK_IVF_MIN_N 4096
 /* Use bounded staging when the existing full-matrix upload would be large. */
 #define SK_IVF_DIRECT_MAX_DIM 160
 #define SK_IVF_MAX_DIM 512
+#ifndef SK_IVF_UPLOAD_ROWS
 #define SK_IVF_UPLOAD_ROWS 16384
+#endif
 #define SK_QCHECK_WIDE_MIN 0.99
 /* Sampled quality gate for the fast path (see sk_build_ivf_graph). */
 #define SK_QCHECK_MIN 0.94
 #define SK_SAMPLE 256
 #define SK_EXACT_K 32
+#ifndef SK_CHUNK
 #define SK_CHUNK 1024
+#endif
+#ifndef SK_SEARCH_WIDTH
+#define SK_SEARCH_WIDTH 24
+#endif
 /* Above this dimension the device copy of the dataset that the CAGRA index is
  * built over is kept in FP16 (half of the FP32 footprint). The contest allows
  * internal FP16 as long as the external FP32 semantics and the recall gates
@@ -640,7 +649,7 @@ int seekdb_cuvs_search(void* handle, const float* query, long nq, long topk,
       size_t required_itopk = (size_t)topk * 4;
       if (required_itopk < 512) required_itopk = 512;
       sp->itopk_size = h->default_itopk > required_itopk ? h->default_itopk : required_itopk;
-      sp->search_width = 7;
+      sp->search_width = SK_SEARCH_WIDTH;
     }
     cuvsFilter f; f.type=NO_FILTER; f.addr=(uintptr_t)0;
     if (cuvsCagraSearch(h->res, sp, h->idx, &qt, &nt, &dt, f) != CUVS_SUCCESS) { rc=15; goto done; }

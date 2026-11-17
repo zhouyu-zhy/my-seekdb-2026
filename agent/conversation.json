@@ -1,0 +1,2269 @@
+{
+ "material": {
+  "type": "real_learning_session_record",
+  "synthetic": false,
+  "language": "zh-CN",
+  "repo": "https://github.com/zhouyu-zhy/my-seekdb-2026",
+  "branch": "new-prompt",
+  "period": "2026-11-16 ~ 2026-11-17",
+  "roles": {
+   "student": "写预测、判断、结果后解释、修正方案、复测预测、迁移与局限；并给出提交约束、发现异常命令、否决不合格材料。",
+   "agent": "生成题目与实验脚本、执行实验、整理本文件的对话结构。",
+   "tool": "数据库进程或测试脚本的真实输出。"
+  },
+  "assistant_role": "题目、实验脚本，以及“给出输出后请学生解释”的追问由 Agent 产生；本文件只把学生自己写的文字当学生学习证据，Agent 的解释和总结不当学生理解。",
+  "reading": "conversations 按题号排列；role=agent 是 Agent 的提问或追问，role=student 是学生原文，role=tool 是真实输出并标注执行者与环境。",
+  "timing": "Q01–Q15 的预测写在对应实验之前；Q16–Q50 没有实验前预测，判断与解释同轮撰写；A(3).md 复测轮的 A、C、D 为复测前所写，B、E 按文档自述已按复测结果修订；A(4)、A(5)、A(7) 的迁移输出先由 Agent 给出，学生随后写 A、B、C。",
+  "desensitization": "两处 prompt 里的四个 GitHub token 替换为 <REDACTED_GITHUB_TOKEN_N>，其余文字保持原样。",
+  "source_files": "内容来自本地 A.md、A(1).md、A(2).md、A(3).md、A(4).md、A(5).md、A(7).md、Q.md、P.md、P_results.md、all-results.json 与 data.md；这些文件未随仓库提交，引用到的原文已全部写入本文件。",
+  "removed": "Q35、Q38、Q39 三题按学生要求从材料中删除，其余 47 道题全部保留。",
+  "missing": "Q16–Q50 没有留下实验前预测；迁移线程的预测写在结果之后；P1 的 60,000 行迁移只做了一轮。缺失的部分没有补写或倒填。"
+ },
+ "user_prompts": [
+  {
+   "id": "u1",
+   "date": "2026-11-16",
+   "content": "我当前正参加OCEANBASE大赛，我报名所用的两个代码仓库分别是https://github.com/zhouyu-zhy/my-powercontext-2026.git 和 https://github.com/zhouyu-zhy/my-seekdb-2026.git。然后seekdb仓库的token分别是<REDACTED_GITHUB_TOKEN_1> 和 <REDACTED_GITHUB_TOKEN_2>，powercontext仓库的token分别是<REDACTED_GITHUB_TOKEN_3> 和 <REDACTED_GITHUB_TOKEN_4>。你需要的话自己照着使用。不要push错了，github账户时zhouyu-zhy，powercontext方向用到的时my-powercontext这个仓库。然后我要求你阅读当前文件夹下的加赛文件夹下的prompt文件夹下的题干.txt，了解加赛的要求，然后结合题干以及我的github代码仓库上的文件资料完成加赛的prompt这道题。此外，由于磁盘空间限制，我要求你尽可能将所有的东西放在D盘中进行。",
+   "verbatim": true,
+   "redactions": [
+    "四个 GitHub token 替换为 <REDACTED_GITHUB_TOKEN_N>"
+   ],
+   "context": "交代两个报名仓库、seekdb 方向使用 my-seekdb-2026、不能 push 错仓库，并要求把工作放在 D 盘。"
+  },
+  {
+   "id": "u2",
+   "date": "2026-11-16",
+   "content": "wsl -d Ubuntu-22.04 -- bash -lc \"cd /mnt/d/OBWork && python3 test_veccache.py > /tmp/vc.log 2>&1; cat /tmp/vc.log\"你的这个进程貌似卡死了，你不要进入卡死空转。看看怎么解决，继续吧",
+   "verbatim": true,
+   "context": "学生自己跑向量缓存更新/回滚脚本时看到长时间无输出，要求停止空转并定位原因。"
+  },
+  {
+   "id": "u3",
+   "date": "2026-11-16",
+   "content": "继续",
+   "verbatim": true,
+   "context": "要求继续推进。"
+  },
+  {
+   "id": "u4",
+   "date": "2026-11-16",
+   "content": "我确认了，你提交吧。另外，所有题干里面要求的关于prompt这道题的东西你都做到了吗？因为这个是很难拿到满分的，是比谁的分数更高，我们需要尽量优化到最好。但是优化现在先不用做，我先提交一遍试一试当前的分数。",
+   "verbatim": true,
+   "context": "确认 A 系列回答由本人撰写，并追问 prompt 材料是否覆盖题干每一项要求。"
+  },
+  {
+   "id": "u5",
+   "date": "2026-11-16",
+   "content": "Q40你自己本地跑一遍吧。Q35、Q38、Q39 的话不行就直接删掉，别当作干扰项了。还有Q1-Q15问题是你说的，但是在A(1).md里面是我写的回答啊，你是不是提交错了？还有，关于你所说的缺少的两个文件，我添加在当前文件夹下了。",
+   "verbatim": true,
+   "context": "要求补做 Q40 的运行验证、删掉三条价值低的题，并指出 Agent 把提问者和回答者搞混。"
+  },
+  {
+   "id": "u6",
+   "date": "2026-11-17",
+   "content": "请你阅读当前文件夹下的加赛问价夹下的prompt文件夹下的题干.txt和其他要求说明.txt，我们正在打OCEANBASE比赛，做加塞的prompt部分。然后当前文件夹下的data.md是我手写的问题和我的回答，我先给你说明，我报名所用的两个代码仓库分别是https://github.com/zhouyu-zhy/my-powercontext-2026.git 和https://github.com/zhouyu-zhy/my-seekdb-2026.git。然后seekdb仓库的token分别是<REDACTED_GITHUB_TOKEN_1>和<REDACTED_GITHUB_TOKEN_2>，powercontext仓库的token分别是<REDACTED_GITHUB_TOKEN_3>和<REDACTED_GITHUB_TOKEN_4>。你需要的话自己照着使用。不要push错了，github账户时zhouyu-zhy，powercontext方向用到的时my-powercontext这个仓库。我现在要求你做prompt这道题，在github仓库my-seekdb-2026下创建一个新的branch，名为new-prompt，在这里面做题。同时，做题我要求你使用我的D盘，如果需要磁盘的话。做完以后给我commit id和branch。一定要严格按照题目要求来！",
+   "verbatim": true,
+   "redactions": [
+    "四个 GitHub token 替换为 <REDACTED_GITHUB_TOKEN_N>"
+   ],
+   "context": "重新说明提交约束与分支要求，强调严格按题干执行。"
+  },
+  {
+   "id": "u7",
+   "date": "2026-11-17",
+   "content": "谁让你从2026-competition-round2这个仓库里直接拉取的？这他妈的这个分支里的prompt零分！给我清空new-prompt分支，我要求你从零开始重新做一遍prompt！你所需要的所有需要学生回答的证明实例都在当前文件夹的.md下面，自己去找。不要按照原来的prompt的思路，那极有可能是错的！",
+   "verbatim": true,
+   "context": "否决上一版材料，要求清空重做，并且只使用本地 .md 里的学生原文。"
+  }
+ ],
+ "conversations": [
+  {
+   "id": "S0",
+   "topic": "自己运行的向量缓存测试长时间无输出",
+   "student_timing": "学生先看到命令长时间无输出，要求定位原因；日志随后由 Agent 加 timeout 重跑得到。",
+   "turns": [
+    {
+     "role": "student",
+     "kind": "prompt",
+     "content": "wsl -d Ubuntu-22.04 -- bash -lc \"cd /mnt/d/OBWork && python3 test_veccache.py > /tmp/vc.log 2>&1; cat /tmp/vc.log\"你的这个进程貌似卡死了，你不要进入卡死空转。看看怎么解决，继续吧",
+     "ref": "u2"
+    },
+    {
+     "role": "tool",
+     "kind": "result",
+     "content": "{\"type\":\"ready\"}\nCREATE TABLE t (id BIGINT PRIMARY KEY, e VECTOR(2)); => {'id': 1, 'ok': True}\nINSERT INTO t VALUES (1,'[0,0]'),(2,'[1,0]'),(3,'[2,0]'); => {'id': 2, 'ok': True, 'affected_rows': 3}\nSELECT id, L2_DISTANCE(e,'[0,0]') AS d FROM t ORDER BY d LIMIT 3; => {'id': 3, 'ok': True, 'columns': ['id', 'd'], 'rows': [[1, 0.0], [2, 1.0], [3, 2.0]]}\nUPDATE t SET e='[9,0]' WHERE id=1; => {'id': 4, 'ok': True, 'affected_rows': 1}\nSELECT id, L2_DISTANCE(e,'[0,0]') AS d FROM t ORDER BY d LIMIT 3; => {'id': 5, 'ok': True, 'columns': ['id', 'd'], 'rows': [[2, 1.0], [3, 2.0], [1, 9.0]]}\nDELETE FROM t WHERE id=2; => {'id': 6, 'ok': True, 'affected_rows': 1}\nSELECT id, L2_DISTANCE(e,'[0,0]') AS d FROM t ORDER BY d LIMIT 3; => {'id': 7, 'ok': True, 'columns': ['id', 'd'], 'rows': [[3, 2.0], [1, 9.0]]}\nBEGIN; => {'id': 8, 'ok': True}\nUPDATE t SET e='[0,0]' WHERE id=1; => {'id': 9, 'ok': True, 'affected_rows': 1}\nSELECT id, L2_DISTANCE(e,'[0,0]') AS d FROM t ORDER BY d LIMIT 3; => {'id': 10, 'ok': True, 'columns': ['id', 'd'], 'rows': [[1, 0.0], [3, 2.0]]}\nROLLBACK; => {'id': 11, 'ok': True}\nSELECT id, L2_DISTANCE(e,'[0,0]') AS d FROM t ORDER BY d LIMIT 3; => {'id': 12, 'ok': True, 'columns': ['id', 'd'], 'rows': [[3, 2.0], [1, 9.0]]}\nrc=0",
+     "executed_by": "agent",
+     "environment": "Linux/WSL 本机，加 timeout 重跑"
+    }
+   ]
+  },
+  {
+   "id": "Q01",
+   "topic": "结果顺序是什么？cat 相同的行之间由什么决定？",
+   "student_timing": "预测在实验运行前写于 A.md / A(1).md；结果后解释在结果出来后补写。",
+   "turns": [
+    {
+     "role": "agent",
+     "kind": "question",
+     "content": "结果顺序是什么？cat 相同的行之间由什么决定？"
+    },
+    {
+     "role": "student",
+     "kind": "prediction",
+     "content": "预测：多个向量的 L2 距离完全相同时，TopK 应按主键升序返回；如果并列记录恰好跨越 LIMIT 边界，也应优先选择主键较小的记录。\n理由：距离本身不能区分这些记录，仅依赖扫描顺序、索引顺序或并行执行顺序会导致结果不稳定。增加主键升序作为第二排序键后，排序关系成为确定的全序，既能保证多次查询结果一致，也能让精确检索和召回率计算使用统一、可复现的真值。"
+    },
+    {
+     "role": "tool",
+     "kind": "result",
+     "content": "CREATE {\"ok\":true}\nINSERT {\"ok\":true,\"affected_rows\":5}\nLIMIT3 {\"ok\":true,\"columns\":[\"id\",\"d\"],\"rows\":[[2,1.0],[5,1.0],[7,1.0]]}\nLIMIT4 {\"ok\":true,\"columns\":[\"id\",\"d\"],\"rows\":[[2,1.0],[5,1.0],[7,1.0],[10,1.0]]}",
+     "executed_by": "agent",
+     "environment": "Linux/WSL 本机，Agent 运行实验脚本"
+    },
+    {
+     "role": "agent",
+     "kind": "follow_up",
+     "content": "为什么 LIMIT 为 3 时不能返回主键 10 而排除主键 2，主键升序在这里解决了什么问题。"
+    },
+    {
+     "role": "student",
+     "kind": "explanation",
+     "content": "结果后解释：四条记录的完整并列顺序是 2、5、7、10，因此 LIMIT 3 必须截取 2、5、7，不能用主键 10 替换主键 2；LIMIT 4 时主键 10 才进入结果。主键升序不仅决定并列组内的展示顺序，也决定 TopK 边界究竟保留哪些记录，使截断结果唯一且可复现。"
+    }
+   ]
+  },
+  {
+   "id": "Q02",
+   "topic": "带 WHERE 的 TopK 查询，应该先过滤再算距离，还是先全表取 TopK 再过滤？如果顺序反了，会错在哪里？",
+   "student_timing": "预测在实验运行前写于 A.md / A(1).md；结果后解释在结果出来后补写。",
+   "turns": [
+    {
+     "role": "agent",
+     "kind": "question",
+     "content": "带 WHERE 的 TopK 查询，应该先过滤再算距离，还是先全表取 TopK 再过滤？如果顺序反了，会错在哪里？"
+    },
+    {
+     "role": "student",
+     "kind": "prediction",
+     "content": "预测：带 WHERE 的 TopK 查询必须先过滤，再只在满足条件的记录上计算距离并选取前 K 条；过滤后不足 K 条时，应返回全部符合条件的记录。\n理由：题干规定 TopK 的候选集合是满足 WHERE 条件的记录，而不是全表。若先在全表取 K 条再过滤，符合条件但不在全表前 K 条中的记录会被漏掉，最终还可能错误地返回少于实际符合条件数量的结果；先过滤也可以避免为不满足条件的记录计算距离。"
+    },
+    {
+     "role": "tool",
+     "kind": "result",
+     "content": "CREATE {\"ok\":true}\nINSERT {\"ok\":true,\"affected_rows\":4}\nFILTERED_TOPK {\"ok\":true,\"columns\":[\"id\",\"d\"],\"rows\":[[3,10.0],[4,11.0]]}\nFILTERED_FEWER {\"ok\":true,\"columns\":[\"id\",\"d\"],\"rows\":[[3,10.0],[4,11.0]]}\nALL_TABLE_TOP2 {\"ok\":true,\"columns\":[\"id\",\"d\"],\"rows\":[[1,0.0],[2,0.10000000149011612]]}",
+     "executed_by": "agent",
+     "environment": "Linux/WSL 本机，Agent 运行实验脚本"
+    },
+    {
+     "role": "agent",
+     "kind": "follow_up",
+     "content": "如果过滤后只有 1 条而 LIMIT 为 2，应该返回几条，为什么不能从全表补足到 2 条。"
+    },
+    {
+     "role": "student",
+     "kind": "explanation",
+     "content": "结果后解释：全表 Top2 是不满足条件的 id 1、2，若之后再过滤会得到空结果；先过滤则正确得到 target 的 id 3、4。若过滤后只有一条而 LIMIT 为 2，也只能返回这一条，因为 LIMIT 是返回数量上限而不是必须凑满的数量，不能加入 other 分类的记录来补足两条。"
+    }
+   ]
+  },
+  {
+   "id": "Q03",
+   "topic": "进程被 SIGKILL 后，已确认提交的事务为什么应该还在，未提交事务为什么不应该留下半批数据？",
+   "student_timing": "预测在实验运行前写于 A.md / A(1).md；结果后解释在结果出来后补写。",
+   "turns": [
+    {
+     "role": "agent",
+     "kind": "question",
+     "content": "进程被 SIGKILL 后，已确认提交的事务为什么应该还在，未提交事务为什么不应该留下半批数据？"
+    },
+    {
+     "role": "student",
+     "kind": "prediction",
+     "content": "预测：已返回 COMMIT 成功的事务在 SIGKILL 后必须完整保留；未提交事务在重启后不应留下任何修改。已经发出提交请求但未收到成功响应的事务，可以完整生效或完整不生效，但不能只恢复其中一部分。\n理由：已确认提交代表数据库已经向客户端作出持久化承诺，因此应在成功响应前完成提交记录落盘和必要的 fsync。恢复时只接受具有完整长度、正确 CRC 和有效提交标记的事务块，未提交或写到一半的块不能按独立行操作重放，这样才能避免半批数据破坏事务原子性。"
+    },
+    {
+     "role": "tool",
+     "kind": "result",
+     "content": "TORN_COMMIT_INJECTED {\"committed_prefix_bytes\":312,\"complete_transaction_bytes\":6280052,\"torn_bytes_retained\":4096,\"file_bytes_after_tear\":4408}\nROWS_AFTER_RECOVERY {\"ok\":true,\"columns\":[\"id\"],\"rows\":[[1]]}\nUNFINISHED_ROWS_ABSENT {\"ok\":true,\"columns\":[\"id\"],\"rows\":[]}\nUNCOMMITTED_KILL 1\nAFTER_UNCOMMITTED_KILL {\"ok\":true,\"columns\":[\"id\"],\"rows\":[[1]]}",
+     "executed_by": "agent",
+     "environment": "Linux/WSL 本机，Agent 运行实验脚本"
+    },
+    {
+     "role": "agent",
+     "kind": "follow_up",
+     "content": "恢复时如何判断一个块是完整的，为什么不能按行重放一个只写了一半的事务块。"
+    },
+    {
+     "role": "student",
+     "kind": "explanation",
+     "content": "结果后解释：已提交的 id 1 保留，未提交的 id 2、3 和撕裂大事务中的所有行都没有出现。恢复应根据块头声明的总长度确认整个块都存在，并同时验证 CRC 和有效提交标记，缺任一条件都不能把该块视为完整提交；若按行重放半块，就会把同一事务中恰好先写入的一部分操作错误地变成已提交数据。"
+    }
+   ]
+  },
+  {
+   "id": "Q04",
+   "topic": "checkpoint 正在写新文件时崩溃，重启应该选旧文件还是新文件，为什么不会选到只写了一半的文件？",
+   "student_timing": "预测在实验运行前写于 A.md / A(1).md；结果后解释在结果出来后补写。",
+   "turns": [
+    {
+     "role": "agent",
+     "kind": "question",
+     "content": "checkpoint 正在写新文件时崩溃，重启应该选旧文件还是新文件，为什么不会选到只写了一半的文件？"
+    },
+    {
+     "role": "student",
+     "kind": "prediction",
+     "content": "预测：如果 checkpoint 在写新文件时崩溃，重启应继续使用旧的完整 checkpoint；只有新文件完整写入并持久化、且活动版本完成原子切换后，恢复才应选择新文件。\n理由：新文件在写入途中既不是完整的活动版本，也无法保证校验和及元数据有效，因此不能仅凭文件名较新或修改时间较新就选用它。采用临时文件、完整性与长度校验、fsync 和原子重命名或活动指针切换，可以把新版本设为“要么整体可见、要么完全不可见”，半程文件随后可被忽略或清理。"
+    },
+    {
+     "role": "tool",
+     "kind": "result",
+     "content": "CATALOG_BEFORE \"MVDB-CATALOG-1\\nepoch 0\\nfile rows_0.dat\\n\"\nHALF_NEW_FILE_IGNORED {\"ok\":true,\"columns\":[\"id\"],\"rows\":[[1],[2]]}\nFILES_AFTER_RESTART [\"catalog.dat\",\"rows_0.dat\"]\nFILES_AFTER_CHECKPOINT [\"catalog.dat\",\"rows_1.dat\"]\nCATALOG \"MVDB-CATALOG-1\\nepoch 1\\nfile rows_1.dat\\n\"\nAFTER_CHECKPOINT_RESTART {\"ok\":true,\"columns\":[\"id\",\"cat\"],\"rows\":[[15000,\"u3\"]]}\nTOPK_AFTER_CHECKPOINT {\"ok\":true,\"columns\":[\"id\",\"d\"],\"rows\":[[1,0.0],[2,0.0]]}\nINDEX_AFTER_RESTART {\"ok\":false,\"error\":{\"code\":\"index_exists\",\"message\":\"index already exists\"}}",
+     "executed_by": "agent",
+     "environment": "Linux/WSL 本机，Agent 运行实验脚本"
+    },
+    {
+     "role": "agent",
+     "kind": "follow_up",
+     "content": "如果 rows_99.dat 文件名比 rows_0.dat 新、修改时间也更晚，为什么仍然不能选它。"
+    },
+    {
+     "role": "student",
+     "kind": "explanation",
+     "content": "结果后解释：`rows_99.dat` 即使编号更大、修改时间更晚，也没有被活动 catalog 引用，不能据此推断它已完成 checkpoint。正常 checkpoint 完整写入并原子切换 catalog 后才会使用新文件；本轮 epoch 为 1，而先前实验为 2，只是触发次数不同，不影响“只选择已确认活动版本”的结论。"
+    },
+    {
+     "role": "student",
+     "kind": "retest_prediction",
+     "content": "A 复测前预测：我控制更新次数只触发一次 checkpoint，预期 catalog 中 epoch=1，活动文件为 `rows_1.dat`；再构造半写 `rows_99.dat` 后重启，预期不会选中 `rows_99.dat`，仍读 `rows_1.dat`。"
+    },
+    {
+     "role": "student",
+     "kind": "first_explanation",
+     "content": "B 第一次结果解释：实际 catalog 显示 `epoch=1`、`active=rows_1.dat`；之前看到 `rows_2.dat` 是因为触发了两次 checkpoint，编号随触发次数变化。执行 `SELECT id FROM t` 返回 15,000 行，半写 `rows_99.dat` 被清理，没有被使用。"
+    },
+    {
+     "role": "student",
+     "kind": "correction_plan",
+     "content": "C 修正方案：如果只靠文件名或修改时间选择，半写 `rows_99.dat` 的修改时间更新，会误选到不完整文件；下一次我会保留旧 catalog 指向 `rows_1.dat`，同时放置一个更新的半写 `rows_99.dat`，验证选择依据必须是 catalog 中已确认的 active 文件而不是文件时间。"
+    },
+    {
+     "role": "student",
+     "kind": "retest_prediction2",
+     "content": "D 复测预测：复测前我预期半写 `rows_99.dat` 仍不会被使用，重启后活动文件仍是 `rows_1.dat`，查询结果与 checkpoint 前一致，`rows_99.dat` 可能被忽略或清理。"
+    },
+    {
+     "role": "tool",
+     "kind": "retest_result",
+     "content": "Q04_CATALOG epoch=1 active=rows_1.dat; Q04_COUNT 15000 via SELECT id; files catalog.dat rows_1.dat; half rows_99.dat cleaned",
+     "executed_by": "agent",
+     "environment": "Linux/WSL 本机复测：只触发一次 checkpoint 后重启"
+    },
+    {
+     "role": "student",
+     "kind": "retest_explanation",
+     "content": "E 复测结果解释：复测实际重启后 catalog 仍为 `epoch=1`、`active=rows_1.dat`；执行 `SELECT id FROM t` 返回 15,000 行，`rows_99.dat` 仍被清理。这支持“只选择已确认的活动版本”；局限是还没有模拟目录 fsync 失败。"
+    }
+   ],
+   "note": "A(3).md 复测轮：该文档自述 B、E 已按本机复测结果修订，A、C、D 为复测前所写。"
+  },
+  {
+   "id": "Q05",
+   "topic": "向量按 float32 存储、距离用 double 累加，如果全部改成 float 计算，会有什么风险？为什么查询向量也要先转成 float32？",
+   "student_timing": "预测在实验运行前写于 A.md / A(1).md；结果后解释在结果出来后补写。",
+   "turns": [
+    {
+     "role": "agent",
+     "kind": "question",
+     "content": "向量按 float32 存储、距离用 double 累加，如果全部改成 float 计算，会有什么风险？为什么查询向量也要先转成 float32？"
+    },
+    {
+     "role": "student",
+     "kind": "prediction",
+     "content": "预测：如果距离累加也全部使用 float，较大的平方和更容易产生累计舍入误差，中间结果还可能提前溢出为 Infinity，进而改变距离排序或 TopK 边界。使用 double 累加能降低这些风险，但存入向量的每个分量仍应是 float32。\n理由：多个 float32 分量分别平方并累加时，单次运算和总和的精度可能高于 float 的表示能力，double 能保留更多有效位并提供更大的中间值范围。查询向量也要先转换成 float32，是为了让查询与已存储向量经过相同的量化规则，避免查询侧保留 double 精度而得到另一套距离结果；NaN、Infinity 和转换溢出则应在接收时拒绝。"
+    },
+    {
+     "role": "tool",
+     "kind": "result",
+     "content": "CREATE {\"ok\":true}\nINSERT_LARGE {\"ok\":true,\"affected_rows\":1}\nLARGE_DISTANCE {\"ok\":true,\"columns\":[\"id\",\"d\"],\"rows\":[[1,2.0000000400817547e+20]]}\nINSERT_COMPONENT {\"ok\":true,\"affected_rows\":1}\nLARGE_COMPONENT_DISTANCE {\"ok\":true,\"columns\":[\"id\",\"d\"],\"rows\":[[2,16777216.00000003]]}\nOVERFLOW_REJECT {\"ok\":false,\"error\":{\"code\":\"invalid_vector\",\"message\":\"vector component is not a finite float32\"}}",
+     "executed_by": "agent",
+     "environment": "Linux/WSL 本机，Agent 运行实验脚本"
+    },
+    {
+     "role": "agent",
+     "kind": "follow_up",
+     "content": "为什么查询向量也要先转成 float32，而不是保留 double 参与距离计算。"
+    },
+    {
+     "role": "student",
+     "kind": "explanation",
+     "content": "结果后解释：double 承载平方和，因此没有按 float 路径溢出，16777216 平方后加 1 的细小差异也能反映到最终距离中。查询向量先转成 float32，是为了与入库分量采用完全相同的舍入和溢出规则，否则存储侧已经量化、查询侧却保留 double 原值，会对同一逻辑输入计算出另一套距离。"
+    }
+   ]
+  },
+  {
+   "id": "Q06",
+   "topic": "普通 ORDER BY 的并列顺序：普通列排序出现相同值时，第二排序键是什么，为什么？",
+   "student_timing": "预测在实验运行前写于 A.md / A(1).md；结果后解释在结果出来后补写。",
+   "turns": [
+    {
+     "role": "agent",
+     "kind": "question",
+     "content": "普通 ORDER BY 的并列顺序：普通列排序出现相同值时，第二排序键是什么，为什么？"
+    },
+    {
+     "role": "student",
+     "kind": "prediction",
+     "content": "预测：结果顺序应为 `(2,a)、(3,a)、(1,b)、(4,b)`。cat 相同的行之间按主键 id 升序排列。\n理由：普通 ORDER BY 首先按指定列排序，但相同 cat 无法确定先后，题干用主键升序作为统一的第二排序键。这样结果不会依赖插入顺序或物理扫描顺序。"
+    },
+    {
+     "role": "tool",
+     "kind": "result",
+     "content": "CREATE {\"ok\":true}\nINSERT {\"ok\":true,\"affected_rows\":4}\nORDER_TIES {\"ok\":true,\"columns\":[\"id\",\"cat\"],\"rows\":[[2,\"a\"],[3,\"a\"],[1,\"b\"],[4,\"b\"]]}\nORDER_TIES_LIMIT2 {\"ok\":true,\"columns\":[\"id\",\"cat\"],\"rows\":[[2,\"a\"],[3,\"a\"]]}",
+     "executed_by": "agent",
+     "environment": "Linux/WSL 本机，Agent 运行实验脚本"
+    },
+    {
+     "role": "agent",
+     "kind": "follow_up",
+     "content": "如果 LIMIT 截断在 2、3 中间，应该保留谁，为什么。"
+    },
+    {
+     "role": "student",
+     "kind": "explanation",
+     "content": "结果后解释：实测与预测一致。cat 是第一排序键，id 升序消除同值行的不确定性，LIMIT 在这个确定顺序上截断。"
+    }
+   ]
+  },
+  {
+   "id": "Q07",
+   "topic": "哪些值可以插入，哪些会报 value_too_long？VARCHAR(n) 的 n 按字节还是按 Unicode 字符算？",
+   "student_timing": "预测在实验运行前写于 A.md / A(1).md；结果后解释在结果出来后补写。",
+   "turns": [
+    {
+     "role": "agent",
+     "kind": "question",
+     "content": "哪些值可以插入，哪些会报 value_too_long？VARCHAR(n) 的 n 按字节还是按 Unicode 字符算？"
+    },
+    {
+     "role": "student",
+     "kind": "prediction",
+     "content": "预测：“中文”“abc”和“😀😀😀”都可以插入 VARCHAR(3)，而“abcd”返回 `value_too_long`。这里的 n 按 Unicode 码点数量计算，不是按 UTF-8 字节数计算。\n理由：“中文”是两个码点，“abc”是三个码点，每个 😀 虽然占四个 UTF-8 字节，但只是一个 Unicode 码点，所以三个 emoji 仍符合长度 3。“abcd”有四个字符，超过定义长度。"
+    },
+    {
+     "role": "tool",
+     "kind": "result",
+     "content": "CREATE {\"ok\":true}\nTWO_CHARS {\"ok\":true,\"affected_rows\":1}\nABC {\"ok\":true,\"affected_rows\":1}\nEMOJI3 {\"ok\":true,\"affected_rows\":1}\nABCD {\"ok\":false,\"error\":{\"code\":\"value_too_long\",\"message\":\"string exceeds VARCHAR length\"}}\nROWS {\"ok\":true,\"columns\":[\"id\",\"v\"],\"rows\":[[1,\"中文\"],[2,\"abc\"],[3,\"😀😀😀\"]]}",
+     "executed_by": "agent",
+     "environment": "Linux/WSL 本机，Agent 运行实验脚本"
+    },
+    {
+     "role": "agent",
+     "kind": "follow_up",
+     "content": "为什么 😀😀😀 算三个字符而不是十二个字节。"
+    },
+    {
+     "role": "student",
+     "kind": "explanation",
+     "content": "结果后解释：实测确认长度按 Unicode 码点计数，而不是按 UTF-8 字节数。失败值没有进入表中，其他成功插入不受影响。"
+    }
+   ]
+  },
+  {
+   "id": "Q08",
+   "topic": "顺序是什么？按 UTF-8 字节比较和按 Unicode 码点比较会不会得到不同结果？",
+   "student_timing": "预测在实验运行前写于 A.md / A(1).md；结果后解释在结果出来后补写。",
+   "turns": [
+    {
+     "role": "agent",
+     "kind": "question",
+     "content": "顺序是什么？按 UTF-8 字节比较和按 Unicode 码点比较会不会得到不同结果？"
+    },
+    {
+     "role": "student",
+     "kind": "prediction",
+     "content": "预测：升序结果应为 `ab、乙、甲`。按 UTF-8 字节比较和按 Unicode 码点比较在这个例子中结果一致，对合法 UTF-8 字符串通常也具有相同的码点顺序。\n理由：`ab` 以 U+0061 开头，乙是 U+4E59，甲是 U+7532，因此码点升序就是上述顺序。UTF-8 的编码结构保留了码点之间的大小关系，所以两种比较方式不会产生不同排序。"
+    },
+    {
+     "role": "tool",
+     "kind": "result",
+     "content": "CREATE {\"ok\":true}\nINSERT {\"ok\":true,\"affected_rows\":3}\nUNICODE_ORDER {\"ok\":true,\"columns\":[\"id\",\"name\"],\"rows\":[[3,\"ab\"],[2,\"乙\"],[1,\"甲\"]]}",
+     "executed_by": "agent",
+     "environment": "Linux/WSL 本机，Agent 运行实验脚本"
+    },
+    {
+     "role": "agent",
+     "kind": "follow_up",
+     "content": "如果实现改成按 UTF-8 字节比较，这个例子会不会改变顺序。"
+    },
+    {
+     "role": "student",
+     "kind": "explanation",
+     "content": "结果后解释：顺序与码点计算一致。合法 UTF-8 的字节序保持 Unicode 码点序，因此直接比较 UTF-8 字节也能实现这一排序，无需把中文按本地代码页转换。"
+    }
+   ]
+  },
+  {
+   "id": "Q09",
+   "topic": "SELECT id 输出 JSON 时，两个值是否都能精确保持？如果客户端按 JavaScript Number 解析会怎样？",
+   "student_timing": "预测在实验运行前写于 A.md / A(1).md；结果后解释在结果出来后补写。",
+   "turns": [
+    {
+     "role": "agent",
+     "kind": "question",
+     "content": "SELECT id 输出 JSON 时，两个值是否都能精确保持？如果客户端按 JavaScript Number 解析会怎样？"
+    },
+    {
+     "role": "student",
+     "kind": "prediction",
+     "content": "预测：JSON 输出应把两个 id 都写成十进制整数字面量，分别保持 9007199254740993 和 9007199254740992，数据库内部及序列化过程不能经过 double。若客户端直接按 JavaScript Number 解析，两者会失去区分，都会表示为 9007199254740992。\n理由：9007199254740993 已超过 JavaScript 的 `Number.MAX_SAFE_INTEGER`，Number 无法精确表示所有这样的整数。需要精确保留时，客户端应使用支持任意精度整数的解析方式，例如解析为 BigInt，而不能依赖普通 `JSON.parse` 后的 Number。"
+    },
+    {
+     "role": "tool",
+     "kind": "result",
+     "content": "CREATE {\"ok\":true}\nINSERT {\"ok\":true,\"affected_rows\":2}\nBIGINT_PRECISION {\"ok\":true,\"columns\":[\"id\"],\"rows\":[[9007199254740992],[9007199254740993]]}",
+     "executed_by": "agent",
+     "environment": "Linux/WSL 本机，Agent 运行实验脚本"
+    },
+    {
+     "role": "agent",
+     "kind": "follow_up",
+     "content": "如果中间用 double 再序列化，较大的那个值会变成什么。"
+    },
+    {
+     "role": "student",
+     "kind": "explanation",
+     "content": "结果后解释：数据库输出本身没有丢精度，风险发生在客户端把字面量转成 IEEE 754 double 时。普通 `JSON.parse` 不能证明 BIGINT 精度安全，需使用大整数解析或文本处理。"
+    }
+   ]
+  },
+  {
+   "id": "Q10",
+   "topic": "返回哪 3 行有保证吗？题干的“按集合比较”对结果意味着什么？",
+   "student_timing": "预测在实验运行前写于 A.md / A(1).md；结果后解释在结果出来后补写。",
+   "turns": [
+    {
+     "role": "agent",
+     "kind": "question",
+     "content": "返回哪 3 行有保证吗？题干的“按集合比较”对结果意味着什么？"
+    },
+    {
+     "role": "student",
+     "kind": "prediction",
+     "content": "预测：没有 ORDER BY 时，不应把“具体返回哪三行”作为可依赖的 SQL 排序语义，但表中至少有十行时仍应恰好返回三行。题干的“按集合比较”表示评测不区分这三行的排列顺序，而不是允许少返、重复或改变行内容。\n理由：LIMIT 只限制结果数量，本身不提供排序键；没有 ORDER BY 时，实现可按自己的合法扫描顺序提前取得三行。集合比较只消除顺序要求，具体结果仍须满足查询和 LIMIT 语义。"
+    },
+    {
+     "role": "tool",
+     "kind": "result",
+     "content": "CREATE {\"ok\":true}\nINSERT {\"ok\":true,\"affected_rows\":10}\nLIMIT_NO_ORDER {\"ok\":true,\"columns\":[\"id\"],\"rows\":[[1],[2],[3]]}\nLIMIT_ORDERED {\"ok\":true,\"columns\":[\"id\"],\"rows\":[[1],[2],[3]]}",
+     "executed_by": "agent",
+     "environment": "Linux/WSL 本机，Agent 运行实验脚本"
+    },
+    {
+     "role": "agent",
+     "kind": "follow_up",
+     "content": "如果加上 ORDER BY id，结果集合会变成什么，为什么这时可以依赖顺序。"
+    },
+    {
+     "role": "student",
+     "kind": "explanation",
+     "content": "结果后解释：本次恰好按主键顺序返回是当前实现的扫描结果，不应上升为无 ORDER BY 的通用排序保证。可依赖的是三行均满足查询、没有重复且数量不超过 LIMIT。"
+    },
+    {
+     "role": "student",
+     "kind": "retest_prediction",
+     "content": "A 复测前预测：我预期无 ORDER BY 的 `LIMIT 3` 和 `ORDER BY id` 的 `LIMIT 3` 结果不一定相同；无 ORDER BY 可能按插入或扫描顺序返回 `30,10,20`，ORDER BY id 应返回 `10,20,30`。"
+    },
+    {
+     "role": "student",
+     "kind": "first_explanation",
+     "content": "B 第一次结果解释：实际按 `30,10,20,50,40` 插入后，无 ORDER BY 的 `LIMIT 3` 返回 `10,20,30`；`ORDER BY id LIMIT 3` 也返回 `10,20,30`。这与预测的 `30,10,20` 不同，当前实现会在提前停止后按主键整理结果。"
+    },
+    {
+     "role": "student",
+     "kind": "correction_plan",
+     "content": "C 修正方案：如果要求结果稳定，我会在查询中显式加 `ORDER BY id`，并在复测中同时执行无 ORDER BY 和 ORDER BY 两个版本，比较返回 id 集合，避免把“集合比较”误写成“固定顺序”。"
+    },
+    {
+     "role": "student",
+     "kind": "retest_prediction2",
+     "content": "D 复测预测：复测前我预期加 `ORDER BY id LIMIT 3` 后稳定返回 `10,20,30`，因为排序键明确且 id 唯一，不受插入顺序影响。"
+    },
+    {
+     "role": "tool",
+     "kind": "retest_result",
+     "content": "Q10_NO_ORDER {\"id\": 3, \"ok\": true, \"columns\": [\"id\"], \"rows\": [[10], [20], [30]]}\nQ10_ORDER {\"id\": 4, \"ok\": true, \"columns\": [\"id\"], \"rows\": [[10], [20], [30]]}",
+     "executed_by": "agent",
+     "environment": "Linux/WSL 本机复测：按 30,10,20,50,40 插入后比较无 ORDER BY 与 ORDER BY"
+    },
+    {
+     "role": "student",
+     "kind": "retest_explanation",
+     "content": "E 复测结果解释：复测实际 `ORDER BY id LIMIT 3` 返回 `10,20,30`，无 ORDER BY 的 `LIMIT 3` 仍返回 `10,20,30`。这说明“集合比较”和“排序保证”是两件事；局限是还没有在更多行和删除后验证无 ORDER BY 的扫描顺序。"
+    }
+   ],
+   "note": "A(3).md 复测轮：该文档自述 B、E 已按本机复测结果修订，A、C、D 为复测前所写。"
+  },
+  {
+   "id": "Q11",
+   "topic": "前 3 行会写入吗？返回什么错误？为什么不能只写前 3 行？",
+   "student_timing": "预测在实验运行前写于 A.md / A(1).md；结果后解释在结果出来后补写。",
+   "turns": [
+    {
+     "role": "agent",
+     "kind": "question",
+     "content": "前 3 行会写入吗？返回什么错误？为什么不能只写前 3 行？"
+    },
+    {
+     "role": "student",
+     "kind": "prediction",
+     "content": "预测：前三个已检查通过的行也不会写入，整条 INSERT 返回 `duplicate_primary_key`，本语句新增行数为零。不能只写前三行，因为一条多行 INSERT 是一个原子语句。\n理由：第四行重复说明整条语句违反主键唯一性，数据库应在应用任何修改前完成校验，或在失败时撤销本语句的全部暂存修改。否则调用方收到失败后还要自行清理部分数据，会破坏语句原子性和后续重试语义。"
+    },
+    {
+     "role": "tool",
+     "kind": "result",
+     "content": "CREATE {\"ok\":true}\nINSERT_SEED {\"ok\":true,\"affected_rows\":1}\nDUPLICATE_MULTIROW {\"ok\":false,\"error\":{\"code\":\"duplicate_key\",\"message\":\"duplicate primary key\"}}\nROWS_AFTER_FAILURE {\"ok\":true,\"columns\":[\"id\"],\"rows\":[[4]]}",
+     "executed_by": "agent",
+     "environment": "Linux/WSL 本机，Agent 运行实验脚本"
+    },
+    {
+     "role": "agent",
+     "kind": "follow_up",
+     "content": "如果实现逐行写入前 3 行再发现重复，客户端会看到什么不一致。"
+    },
+    {
+     "role": "student",
+     "kind": "correction",
+     "content": "预测修正：原子性判断正确，但我原先预测的错误码 `duplicate_primary_key` 不准确，当前实现的实际错误码是 `duplicate_key`。"
+    },
+    {
+     "role": "student",
+     "kind": "retest_prediction",
+     "content": "A 复测前预测：我预期多行 INSERT 仍然是整条语句原子，预置 id=4 后执行 `(1),(2),(4),(5)` 不会留下 id=1、id=2，最终表里只有 id=4；错误码我原先猜是 `duplicate_primary_key`，因为重复的是主键。"
+    },
+    {
+     "role": "student",
+     "kind": "first_explanation",
+     "content": "B 第一次结果解释：实际返回错误码是 `duplicate_key`，不是 `duplicate_primary_key`；执行后 `SELECT id FROM t ORDER BY id` 只有 `4` 一行。说明第 1、2 个元组虽然先被处理，但整条多行 INSERT 失败后没有部分生效，前三个元组都没有留下，重复位置在第 4 个元组。"
+    },
+    {
+     "role": "student",
+     "kind": "correction_plan",
+     "content": "C 修正方案：下一次我会把重复主键放到第一个元组，预置 id=1 后执行 `INSERT INTO t VALUES (1),(2),(3)`，检查错误码和最终表是否仍只有 id=1；这样可以把“重复位置影响原子性”和“整条语句统一回滚”两种解释区分开。"
+    },
+    {
+     "role": "student",
+     "kind": "retest_prediction2",
+     "content": "D 复测预测：复测前我预期错误码仍是 `duplicate_key`，最终表只有预置的 id=1，id=2、id=3 不会写入，因为失败发生在语句执行阶段，整条语句应回滚。"
+    },
+    {
+     "role": "tool",
+     "kind": "retest_result",
+     "content": "Q11_FIRST_ROWS {\"id\": 4, \"ok\": true, \"columns\": [\"id\"], \"rows\": [[4]]}\nQ11_RETEST_ROWS {\"id\": 8, \"ok\": true, \"columns\": [\"id\"], \"rows\": [[1]]}",
+     "executed_by": "agent",
+     "environment": "Linux/WSL 本机复测：重复主键放到第一个元组"
+    },
+    {
+     "role": "student",
+     "kind": "retest_explanation",
+     "content": "E 复测结果解释：复测实际返回 `duplicate_key`，`SELECT id FROM t ORDER BY id` 结果只有 `1` 一行，id=2、id=3 均未留下。这支持“整条多行 INSERT 原子”；局限是还没有覆盖多行 INSERT 中类型错误、长度错误等非主键错误是否同样原子。"
+    }
+   ],
+   "note": "A(3).md 复测轮：该文档自述 B、E 已按本机复测结果修订，A、C、D 为复测前所写。"
+  },
+  {
+   "id": "Q12",
+   "topic": "应该返回什么错误？如果这条语句在 BEGIN 之后执行，事务还能继续 COMMIT 或 ROLLBACK 吗？",
+   "student_timing": "预测在实验运行前写于 A.md / A(1).md；结果后解释在结果出来后补写。",
+   "turns": [
+    {
+     "role": "agent",
+     "kind": "question",
+     "content": "应该返回什么错误？如果这条语句在 BEGIN 之后执行，事务还能继续 COMMIT 或 ROLLBACK 吗？"
+    },
+    {
+     "role": "student",
+     "kind": "prediction",
+     "content": "预测：JOIN 和 ALTER TABLE 都应返回 `unsupported_statement`。如果错误发生在 BEGIN 之后，事务本身不应被自动提交或回滚，之前成功的修改仍保留在事务内，之后可以继续 COMMIT 或 ROLLBACK。\n理由：不支持语法只表示当前语句无法执行，不等于此前事务操作失效。失败语句不应产生部分修改，事务的最终取舍仍由客户端显式提交或回滚决定。"
+    },
+    {
+     "role": "tool",
+     "kind": "result",
+     "content": "CREATE {\"ok\":true}\nCREATE_U {\"ok\":true}\nBEGIN {\"ok\":true}\nINSERT {\"ok\":true,\"affected_rows\":1}\nJOIN_ERROR {\"ok\":false,\"error\":{\"code\":\"unsupported_sql\",\"message\":\"SQL feature is not supported\"}}\nALTER_ERROR {\"ok\":false,\"error\":{\"code\":\"unsupported_sql\",\"message\":\"statement is not supported\"}}\nROWS_IN_TXN {\"ok\":true,\"columns\":[\"id\"],\"rows\":[[1]]}\nCOMMIT {\"ok\":true}\nROWS_AFTER_COMMIT {\"ok\":true,\"columns\":[\"id\"],\"rows\":[[1]]}",
+     "executed_by": "agent",
+     "environment": "Linux/WSL 本机，Agent 运行实验脚本"
+    },
+    {
+     "role": "agent",
+     "kind": "follow_up",
+     "content": "为什么语句失败没有把整个事务一起回滚。"
+    },
+    {
+     "role": "student",
+     "kind": "correction",
+     "content": "预测修正：事务保留的判断正确，但原先写的 `unsupported_statement` 不是当前实现错误码，应修正为 `unsupported_sql`。"
+    },
+    {
+     "role": "student",
+     "kind": "retest_prediction",
+     "content": "A 复测前预测：我预期 BEGIN 后插入 id=1，再执行 JOIN 和 ALTER 都会返回 `unsupported_sql`，事务仍然有效；最后 ROLLBACK 后表里应为 0 行，因为 id=1 是未提交插入。"
+    },
+    {
+     "role": "student",
+     "kind": "first_explanation",
+     "content": "B 第一次结果解释：实际执行 JOIN 返回 `unsupported_sql`，执行 ALTER 也返回 `unsupported_sql`；两条错误后事务内 `SELECT id FROM t` 仍能看到 id=1，说明事务没有被错误语句中止。最后 ROLLBACK 后查询返回 0 行，与预测一致。"
+    },
+    {
+     "role": "student",
+     "kind": "correction_plan",
+     "content": "C 修正方案：如果要证明错误只影响当前语句，我会把最后的 ROLLBACK 改成 COMMIT，验证 COMMIT 后 id=1 是否仍然保留；这样能区分“错误语句导致事务失效”和“错误只跳过当前语句、事务继续有效”。"
+    },
+    {
+     "role": "student",
+     "kind": "retest_prediction2",
+     "content": "D 复测预测：复测前我预期 COMMIT 后表里有 id=1 一行，因为 JOIN 和 ALTER 只是当前语句失败，BEGIN 后的插入已经成功，事务仍可提交。"
+    },
+    {
+     "role": "tool",
+     "kind": "retest_result",
+     "content": "Q12_ROLLBACK_ROWS {\"id\": 8, \"ok\": true, \"columns\": [\"id\"], \"rows\": []}\nQ12_COMMIT_ROWS {\"id\": 13, \"ok\": true, \"columns\": [\"id\"], \"rows\": [[1]]}",
+     "executed_by": "agent",
+     "environment": "Linux/WSL 本机复测：两条错误语句后改为 COMMIT"
+    },
+    {
+     "role": "student",
+     "kind": "retest_explanation",
+     "content": "E 复测结果解释：复测实际在 COMMIT 后执行 `SELECT id FROM t` 返回 `1` 一行，说明语句失败不等于事务失败，之前的插入可以继续提交。局限是只验证了 JOIN 和 ALTER 两种不支持语句，没有覆盖语法错误和类型错误。"
+    }
+   ],
+   "note": "A(3).md 复测轮：该文档自述 B、E 已按本机复测结果修订，A、C、D 为复测前所写。"
+  },
+  {
+   "id": "Q13",
+   "topic": "事务内 SELECT 看到新值还是旧值？ROLLBACK 后的 SELECT 看到什么？",
+   "student_timing": "预测在实验运行前写于 A.md / A(1).md；结果后解释在结果出来后补写。",
+   "turns": [
+    {
+     "role": "agent",
+     "kind": "question",
+     "content": "事务内 SELECT 看到新值还是旧值？ROLLBACK 后的 SELECT 看到什么？"
+    },
+    {
+     "role": "student",
+     "kind": "prediction",
+     "content": "预测：事务内 SELECT 应看到 UPDATE 后的新值，ROLLBACK 后的 SELECT 应重新看到更新前的旧值。这就是事务的“读己之写”，但未提交修改不能变成已提交状态。\n理由：当前事务的查询需要合并已提交数据与自己的私有修改，因此能读到本事务刚写入的值。回滚会整体丢弃这些私有修改，不会把新值留在表或索引中。"
+    },
+    {
+     "role": "tool",
+     "kind": "result",
+     "content": "CREATE {\"ok\":true}\nINSERT {\"ok\":true,\"affected_rows\":1}\nBEGIN {\"ok\":true}\nUPDATE {\"ok\":true,\"affected_rows\":1}\nREAD_OWN_WRITE {\"ok\":true,\"columns\":[\"value\"],\"rows\":[[20]]}\nROLLBACK {\"ok\":true}\nAFTER_ROLLBACK {\"ok\":true,\"columns\":[\"value\"],\"rows\":[[10]]}",
+     "executed_by": "agent",
+     "environment": "Linux/WSL 本机，Agent 运行实验脚本"
+    },
+    {
+     "role": "agent",
+     "kind": "follow_up",
+     "content": "如果事务内读到旧值 10，会违反什么语义。"
+    },
+    {
+     "role": "student",
+     "kind": "explanation",
+     "content": "结果后解释：实测同时验证了“读己之写”和回滚隔离：新值在事务内可见，但未提交状态没有泄漏成已提交数据。"
+    }
+   ]
+  },
+  {
+   "id": "Q14",
+   "topic": "两次距离是否相同？如果不相同，事务内的检索结果会不会影响回滚后的结果？",
+   "student_timing": "预测在实验运行前写于 A.md / A(1).md；结果后解释在结果出来后补写。",
+   "turns": [
+    {
+     "role": "agent",
+     "kind": "question",
+     "content": "两次距离是否相同？如果不相同，事务内的检索结果会不会影响回滚后的结果？"
+    },
+    {
+     "role": "student",
+     "kind": "prediction",
+     "content": "预测：两次距离不一定相同；如果 UPDATE 改变了该行到查询点的距离，事务内应显示基于新向量计算的距离，ROLLBACK 后应显示基于旧向量计算的距离。事务内检索结果不会影响回滚后的结果。\n理由：事务内 TopK 必须读取本事务可见的新向量，而回滚会撤销该向量及其索引修改。回滚后的查询只能使用恢复后的已提交旧向量，不能复用事务内缓存的距离或候选结果。"
+    },
+    {
+     "role": "tool",
+     "kind": "result",
+     "content": "CREATE {\"ok\":true}\nINSERT {\"ok\":true,\"affected_rows\":1}\nBEGIN {\"ok\":true}\nUPDATE {\"ok\":true,\"affected_rows\":1}\nTXN_VECTOR {\"ok\":true,\"columns\":[\"d\"],\"rows\":[[10.0]]}\nROLLBACK {\"ok\":true}\nROLLBACK_VECTOR {\"ok\":true,\"columns\":[\"d\"],\"rows\":[[0.0]]}",
+     "executed_by": "agent",
+     "environment": "Linux/WSL 本机，Agent 运行实验脚本"
+    },
+    {
+     "role": "agent",
+     "kind": "follow_up",
+     "content": "如果回滚后的 TopK 复用事务内缓存的距离，会发生什么。"
+    },
+    {
+     "role": "student",
+     "kind": "explanation",
+     "content": "结果后解释：两次距离不同且分别符合当时可见的数据版本，说明回滚恢复的不只是标量行内容，也包括向量查询所依赖的状态。"
+    }
+   ]
+  },
+  {
+   "id": "Q15",
+   "topic": "表里最后有几行？第二次 INSERT 失败后，第一次 INSERT 是否还在？",
+   "student_timing": "预测在实验运行前写于 A.md / A(1).md；结果后解释在结果出来后补写。",
+   "turns": [
+    {
+     "role": "agent",
+     "kind": "question",
+     "content": "表里最后有几行？第二次 INSERT 失败后，第一次 INSERT 是否还在？"
+    },
+    {
+     "role": "student",
+     "kind": "prediction",
+     "content": "预测：最后 COMMIT 后表里只有一行 id 1。第二次 INSERT 返回 `duplicate_primary_key`，但第一次成功插入仍保留在事务中，并随后续 COMMIT 一起生效。\n理由：第二次语句与事务内已经存在的 id 1 冲突，因此该失败语句本身不能增加或覆盖任何行。语句失败只回滚当前语句的修改，不会自动回滚整个显式事务，所以第一次插入不会因第二次失败而消失。"
+    },
+    {
+     "role": "tool",
+     "kind": "result",
+     "content": "CREATE {\"ok\":true}\nBEGIN {\"ok\":true}\nFIRST_INSERT {\"ok\":true,\"affected_rows\":1}\nSECOND_INSERT {\"ok\":false,\"error\":{\"code\":\"duplicate_key\",\"message\":\"duplicate primary key\"}}\nCOMMIT {\"ok\":true}\nROWS {\"ok\":true,\"columns\":[\"id\"],\"rows\":[[1]]}",
+     "executed_by": "agent",
+     "environment": "Linux/WSL 本机，Agent 运行实验脚本"
+    },
+    {
+     "role": "agent",
+     "kind": "follow_up",
+     "content": "如果第二次失败导致整个事务自动回滚，第一次插入会怎样。"
+    },
+    {
+     "role": "student",
+     "kind": "correction",
+     "content": "预测修正：行数和事务行为预测正确；错误码应统一修正为当前实现的 `duplicate_key`，不是 `duplicate_primary_key`。"
+    },
+    {
+     "role": "student",
+     "kind": "retest_prediction",
+     "content": "A 复测前预测：我预期 BEGIN 后插入 id=1 成功，第二次插入 id=1 返回 `duplicate_key`，但事务不终止；随后插入 id=2 应成功，COMMIT 后表里应有 id=1、id=2 两行。"
+    },
+    {
+     "role": "student",
+     "kind": "first_explanation",
+     "content": "B 第一次结果解释：实际第二条插入返回 `duplicate_key`，第三条插入 id=2 成功；COMMIT 后 `SELECT id FROM t ORDER BY id` 返回 `1,2` 两行。说明失败语句只撤销自己，没有把整个事务标记为失败。"
+    },
+    {
+     "role": "student",
+     "kind": "correction_plan",
+     "content": "C 修正方案：如果失败语句改为多行 INSERT 且其中一行重复，我会设计 `BEGIN; INSERT id=1; INSERT (2),(1),(3); INSERT id=4; COMMIT;`，检查错误码以及最终是否只保留 id=1、id=4，从而验证多行失败语句本身原子且不影响事务后续语句。"
+    },
+    {
+     "role": "student",
+     "kind": "retest_prediction2",
+     "content": "D 复测预测：复测前我预期多行 INSERT 返回 `duplicate_key`，id=2、id=3 不留下，id=4 仍可插入，COMMIT 后表里只有 id=1、id=4 两行。"
+    },
+    {
+     "role": "tool",
+     "kind": "retest_result",
+     "content": "Q15_FIRST_ROWS {\"id\": 7, \"ok\": true, \"columns\": [\"id\"], \"rows\": [[1], [2]]}\nQ15_RETEST_ROWS {\"id\": 14, \"ok\": true, \"columns\": [\"id\"], \"rows\": [[1], [4]]}",
+     "executed_by": "agent",
+     "environment": "Linux/WSL 本机复测：事务内多行 INSERT 含重复主键"
+    },
+    {
+     "role": "student",
+     "kind": "retest_explanation",
+     "content": "E 复测结果解释：复测实际返回 `duplicate_key`，COMMIT 后 `SELECT id FROM t ORDER BY id` 返回 `1,4`，id=2、id=3 均未留下。这说明“当前语句失败”和“整个事务失败”是两件事；局限是还没有验证失败后显式 ROLLBACK 的路径。"
+    }
+   ],
+   "note": "A(3).md 复测轮：该文档自述 B、E 已按本机复测结果修订，A、C、D 为复测前所写。"
+  },
+  {
+   "id": "Q16",
+   "topic": "自动提交失败：没有显式 BEGIN 时，一条多行 INSERT 失败，应该留下几行？",
+   "student_timing": "没有留下实验前预测；判断与结果解释同轮撰写。",
+   "turns": [
+    {
+     "role": "agent",
+     "kind": "question",
+     "content": "自动提交失败：没有显式 BEGIN 时，一条多行 INSERT 失败，应该留下几行？"
+    },
+    {
+     "role": "student",
+     "kind": "judgement",
+     "content": "判断：自动提交的一条多行 INSERT 失败时，本语句不能留下任何新行，但先前已经提交的数据必须保留。"
+    },
+    {
+     "role": "tool",
+     "kind": "result",
+     "content": "CREATE {\"ok\":true}\nSEED {\"ok\":true,\"affected_rows\":1}\nAUTO_COMMIT_FAILURE {\"ok\":false,\"error\":{\"code\":\"duplicate_key\",\"message\":\"duplicate primary key\"}}\nROWS {\"ok\":true,\"columns\":[\"id\"],\"rows\":[[4]]}",
+     "executed_by": "student",
+     "environment": "Windows/MSVC 构建，学生在自己机器上运行并保存日志"
+    },
+    {
+     "role": "student",
+     "kind": "explanation",
+     "content": "结果后解释：自动提交把整条语句作为一个原子单位，而不是把每个 VALUES 元组分别提交。失败语句中的 id 1、2、5 都没有部分落盘。"
+    }
+   ]
+  },
+  {
+   "id": "Q17",
+   "topic": "事务内 DDL 回滚：BEGIN 后 CREATE TABLE，再 ROLLBACK，表应该存在还是消失，为什么？",
+   "student_timing": "没有留下实验前预测；判断与结果解释同轮撰写。",
+   "turns": [
+    {
+     "role": "agent",
+     "kind": "question",
+     "content": "事务内 DDL 回滚：BEGIN 后 CREATE TABLE，再 ROLLBACK，表应该存在还是消失，为什么？"
+    },
+    {
+     "role": "student",
+     "kind": "judgement",
+     "content": "判断：CREATE TABLE 属于事务可见的元数据修改，ROLLBACK 后表应消失。"
+    },
+    {
+     "role": "tool",
+     "kind": "result",
+     "content": "BEGIN {\"ok\":true}\nCREATE_IN_TXN {\"ok\":true}\nROLLBACK {\"ok\":true}\nSELECT_AFTER_ROLLBACK {\"ok\":false,\"error\":{\"code\":\"table_not_found\",\"message\":\"table does not exist\"}}\nCREATE_AGAIN {\"ok\":true}",
+     "executed_by": "student",
+     "environment": "Windows/MSVC 构建，学生在自己机器上运行并保存日志"
+    },
+    {
+     "role": "student",
+     "kind": "explanation",
+     "content": "结果后解释：表目录也属于事务状态，不能只回滚行而保留空表。同名表能重新创建进一步说明回滚已清除该元数据。"
+    }
+   ]
+  },
+  {
+   "id": "Q18",
+   "topic": "删除后插入同一主键：同一事务内先 DELETE 再 INSERT 相同主键，提交后表里应该有几行？",
+   "student_timing": "没有留下实验前预测；判断与结果解释同轮撰写。",
+   "turns": [
+    {
+     "role": "agent",
+     "kind": "question",
+     "content": "删除后插入同一主键：同一事务内先 DELETE 再 INSERT 相同主键，提交后表里应该有几行？"
+    },
+    {
+     "role": "student",
+     "kind": "judgement",
+     "content": "判断：同事务 DELETE 后 INSERT 相同主键，应得到一行新值，而不是主键冲突或新旧两行。"
+    },
+    {
+     "role": "tool",
+     "kind": "result",
+     "content": "CREATE {\"ok\":true}\nINSERT {\"ok\":true,\"affected_rows\":1}\nBEGIN {\"ok\":true}\nDELETE {\"ok\":true,\"affected_rows\":1}\nREINSERT {\"ok\":true,\"affected_rows\":1}\nCOMMIT {\"ok\":true}\nROWS {\"ok\":true,\"columns\":[\"id\",\"v\"],\"rows\":[[1,\"new\"]]}",
+     "executed_by": "student",
+     "environment": "Windows/MSVC 构建，学生在自己机器上运行并保存日志"
+    },
+    {
+     "role": "student",
+     "kind": "explanation",
+     "content": "结果后解释：事务合并视图先删除旧版本，再接受同主键的新版本。提交后的行数和值都正确反映操作顺序。"
+    }
+   ]
+  },
+  {
+   "id": "Q19",
+   "topic": "shutdown 时有未提交事务：客户端发送 shutdown 时还有未提交事务，应该提交还是回滚，为什么？",
+   "student_timing": "没有留下实验前预测；判断与结果解释同轮撰写。",
+   "turns": [
+    {
+     "role": "agent",
+     "kind": "question",
+     "content": "shutdown 时有未提交事务：客户端发送 shutdown 时还有未提交事务，应该提交还是回滚，为什么？"
+    },
+    {
+     "role": "student",
+     "kind": "judgement",
+     "content": "判断：shutdown 不应替客户端提交未决事务，应按崩溃/关闭语义回滚未提交修改。"
+    },
+    {
+     "role": "tool",
+     "kind": "result",
+     "content": "SHUTDOWN_WITH_TXN {\"ok\":true}\nROWS_AFTER_RESTART {\"ok\":true,\"columns\":[\"id\"],\"rows\":[[1]]}",
+     "executed_by": "student",
+     "environment": "Windows/MSVC 构建，学生在自己机器上运行并保存日志"
+    },
+    {
+     "role": "student",
+     "kind": "explanation",
+     "content": "结果后解释：shutdown 成功只表示服务正常关闭，不代表隐式 COMMIT。未确认的 id 2 没有持久化，避免客户端未提交的数据因管理操作意外生效。"
+    }
+   ]
+  },
+  {
+   "id": "Q20",
+   "topic": "事务外 COMMIT：没有 BEGIN 时直接 COMMIT，应该返回成功还是错误，依据是什么？",
+   "student_timing": "没有留下实验前预测；判断与结果解释同轮撰写。",
+   "turns": [
+    {
+     "role": "agent",
+     "kind": "question",
+     "content": "事务外 COMMIT：没有 BEGIN 时直接 COMMIT，应该返回成功还是错误，依据是什么？"
+    },
+    {
+     "role": "student",
+     "kind": "judgement",
+     "content": "判断：这是实现定义的空事务操作，需要以当前数据库实测为准，不能套用其他数据库行为。"
+    },
+    {
+     "role": "tool",
+     "kind": "result",
+     "content": "COMMIT_WITHOUT_BEGIN {\"ok\":true}\nROLLBACK_WITHOUT_BEGIN {\"ok\":true}",
+     "executed_by": "student",
+     "environment": "Windows/MSVC 构建，学生在自己机器上运行并保存日志"
+    },
+    {
+     "role": "student",
+     "kind": "explanation",
+     "content": "结果后解释：当前实现把两者视为无操作并成功返回，而不是 `no_transaction` 错误。依据是本提交版的明确行为；它没有事务可提交或回滚，也没有修改任何数据。"
+    }
+   ]
+  },
+  {
+   "id": "Q21",
+   "topic": "提交块写到一半被 SIGKILL：重启后应该看到完整批次还是完全看不到，为什么不能出现半批？",
+   "student_timing": "没有留下实验前预测；判断与结果解释同轮撰写。",
+   "turns": [
+    {
+     "role": "agent",
+     "kind": "question",
+     "content": "提交块写到一半被 SIGKILL：重启后应该看到完整批次还是完全看不到，为什么不能出现半批？"
+    },
+    {
+     "role": "student",
+     "kind": "judgement",
+     "content": "判断：提交块只写入一部分时，恢复必须丢弃整个事务，不能出现半批。"
+    },
+    {
+     "role": "tool",
+     "kind": "result",
+     "content": "TORN_COMMIT_INJECTED {\"committed_prefix_bytes\":248,\"complete_transaction_bytes\":1860052,\"torn_bytes_retained\":4096,\"file_bytes_after_tear\":4344}\nROWS_AFTER_RECOVERY {\"ok\":true,\"columns\":[\"id\"],\"rows\":[[1]]}\nUNFINISHED_ROWS_ABSENT {\"ok\":true,\"columns\":[\"id\"],\"rows\":[]}",
+     "executed_by": "student",
+     "environment": "Windows/MSVC 构建，学生在自己机器上运行并保存日志"
+    },
+    {
+     "role": "student",
+     "kind": "explanation",
+     "content": "结果后解释：长度不足使尾部事务块不具备完整提交条件，恢复在之前有效块边界停止。该实验通过确定性文件截断模拟断电时的部分写入，不把随机强杀恰好写完的情况冒充撕裂提交。"
+    },
+    {
+     "role": "student",
+     "kind": "retest_prediction",
+     "content": "A 复测前预测：本机块布局为 schema 0 到 79、id1 103 到 284、id2 和 id3 312 到 678。我预期截断 60 字节会因 schema 不完整返回 `table_not_found`；截断 200 字节落在 id1 记录中间，rows 为 `[]`；截断 400 字节落在 id2/id3 记录中间，rows 为 `[[1]]`。"
+    },
+    {
+     "role": "student",
+     "kind": "first_explanation",
+     "content": "B 第一次结果解释：实际截断 60 字节返回 `table_not_found`；截断 200 字节 rows 为 `[]`；截断 400 字节 rows 为 `[[1]]`。三种截断都停在完整记录边界之前，id1 在 200 字节截断时没有保留，400 字节截断时只保留 id1。"
+    },
+    {
+     "role": "student",
+     "kind": "correction_plan",
+     "content": "C 修正方案：如果要区分“长度不足”和“CRC 错误”，我会保持长度字段不变，单独翻转 id1 块偏移 `0x8d` 和 id2/id3 块偏移 `0x15e` 的字节，制造 CRC 错误；长度不足继续用截断 200 字节和 400 字节复现，观察恢复边界和错误分类是否不同。"
+    },
+    {
+     "role": "student",
+     "kind": "retest_prediction2",
+     "content": "D 复测预测：复测前我预期翻转 id1 块 CRC 后 rows 仍为 `[]`，翻转 id2/id3 块 CRC 后 rows 仍为 `[[1]]`；截断 200 字节仍为 `[]`，截断 400 字节仍为 `[[1]]`，因为 CRC 不匹配或长度不足时都不能确认该记录完整。"
+    },
+    {
+     "role": "tool",
+     "kind": "retest_result",
+     "content": "Q21_BLOCKS schema 0/28/51, id1 103/131/157, txn 312/340/314; cut 60 table_not_found; cut 200 rows []; cut 400 rows [[1]]\nQ21_CRC: block1 0x8d rows []; block2 0x15e rows [[1]]",
+     "executed_by": "agent",
+     "environment": "Linux/WSL 本机复测：不同截断位置与 CRC 偏移翻转"
+    },
+    {
+     "role": "student",
+     "kind": "retest_explanation",
+     "content": "E 复测结果解释：复测实际截断 200 字节 rows 为 `[]`，截断 400 字节 rows 为 `[[1]]`；翻转 id1 块偏移 `0x8d` 后 rows 为 `[]`，翻转 id2/id3 块偏移 `0x15e` 后 rows 为 `[[1]]`。这说明恢复在最后一个完整事务边界停止，CRC 不匹配和长度不足都不会越过不完整记录；局限是还没有覆盖坏块落在块头导致长度字段不可读的情况。"
+    }
+   ],
+   "note": "A(3).md 复测轮：该文档自述 B、E 已按本机复测结果修订，A、C、D 为复测前所写。"
+  },
+  {
+   "id": "Q22",
+   "topic": "已确认提交后 SIGKILL：COMMIT 响应已经发出，进程立刻被强杀，重启后数据是否必须还在？",
+   "student_timing": "没有留下实验前预测；判断与结果解释同轮撰写。",
+   "turns": [
+    {
+     "role": "agent",
+     "kind": "question",
+     "content": "已确认提交后 SIGKILL：COMMIT 响应已经发出，进程立刻被强杀，重启后数据是否必须还在？"
+    },
+    {
+     "role": "student",
+     "kind": "judgement",
+     "content": "判断：COMMIT 成功响应已经发出后，即使立刻强杀，数据也必须完整存在。"
+    },
+    {
+     "role": "tool",
+     "kind": "result",
+     "content": "COMMIT_CONFIRMED {\"ok\":true}\nKILL_AFTER_CONFIRM 1\nROWS_AFTER_KILL {\"ok\":true,\"columns\":[\"id\"],\"rows\":[[1],[2],[3]]}",
+     "executed_by": "student",
+     "environment": "Windows/MSVC 构建，学生在自己机器上运行并保存日志"
+    },
+    {
+     "role": "student",
+     "kind": "explanation",
+     "content": "结果后解释：成功响应之前已经完成必要的持久化步骤，因此进程退出不会撤销持久化承诺。这与 Q03/Q21 的未提交或撕裂块形成明确边界。"
+    }
+   ]
+  },
+  {
+   "id": "Q23",
+   "topic": "恢复过程中再次 SIGKILL：启动恢复时再次强杀，下一次启动还能不能继续恢复，为什么？",
+   "student_timing": "没有留下实验前预测；判断与结果解释同轮撰写。",
+   "turns": [
+    {
+     "role": "agent",
+     "kind": "question",
+     "content": "恢复过程中再次 SIGKILL：启动恢复时再次强杀，下一次启动还能不能继续恢复，为什么？"
+    },
+    {
+     "role": "student",
+     "kind": "judgement",
+     "content": "判断：恢复过程再次中断不应破坏最后一份完整日志；下一次启动应能重新扫描并恢复。"
+    },
+    {
+     "role": "tool",
+     "kind": "result",
+     "content": "RECOVERY_INTERRUPTED {\"interrupted_before_ready\":true,\"ready_line\":[\"\"],\"wal_bytes\":37218343}\nROWS_AFTER_SECOND_RESTART {\"ok\":true,\"columns\":[\"id\"],\"rows\":[[11997],[11998],[11999]]}",
+     "executed_by": "student",
+     "environment": "Windows/MSVC 构建，学生在自己机器上运行并保存日志"
+    },
+    {
+     "role": "student",
+     "kind": "explanation",
+     "content": "结果后解释：恢复只读并重放有效日志，不需要先把整份日志改写成另一种状态才能服务，因此重复中断后仍可幂等恢复。checkpoint 切换若发生，也必须依靠 Q04 所述活动版本原子性。"
+    }
+   ]
+  },
+  {
+   "id": "Q24",
+   "topic": "撕裂块的 CRC 处理：读到长度完整但 CRC 不匹配的块时，应该重试、跳过还是截断，为什么？",
+   "student_timing": "没有留下实验前预测；判断与结果解释同轮撰写。",
+   "turns": [
+    {
+     "role": "agent",
+     "kind": "question",
+     "content": "撕裂块的 CRC 处理：读到长度完整但 CRC 不匹配的块时，应该重试、跳过还是截断，为什么？"
+    },
+    {
+     "role": "student",
+     "kind": "judgement",
+     "content": "判断：长度足够但 CRC 不匹配的尾部块不能重放，也不能跳过它继续解释后续字节，应在最后一个有效事务边界截断。"
+    },
+    {
+     "role": "tool",
+     "kind": "result",
+     "content": "CRC_BYTE_FLIPPED {\"offset\":247,\"file_bytes\":272}\nROWS_AFTER_CRC_FAILURE {\"ok\":true,\"columns\":[\"id\",\"v\"],\"rows\":[[1,\"keep\"]]}\nSIZE_AFTER_TRUNCATE 188",
+     "executed_by": "student",
+     "environment": "Windows/MSVC 构建，学生在自己机器上运行并保存日志"
+    },
+    {
+     "role": "student",
+     "kind": "explanation",
+     "content": "结果后解释：CRC 不匹配说明块内容不可信，重试读取不会修复已损坏的持久字节。若跳过坏块继续读，可能把同一事务后续内容或其他字节误解为有效操作，所以整事务丢弃并截断尾部最安全。"
+    },
+    {
+     "role": "student",
+     "kind": "retest_prediction",
+     "content": "A 复测前预测：我预期翻转 id1 块偏移 `0x8d` 的一个字节后，恢复 rows 为 `[]`；翻转 id2 和 id3 块偏移 `0x15e` 的一个字节后，恢复 rows 为 `[[1]]`。"
+    },
+    {
+     "role": "student",
+     "kind": "first_explanation",
+     "content": "B 第一次结果解释：实际数据文件是 `rows_0.dat`。翻转 id1 块偏移 `0x8d` 后重启 rows 为 `[]`；翻转 id2 和 id3 块偏移 `0x15e` 后重启 rows 为 `[[1]]`。两次都没有跳过坏块继续读到后面的完整记录。"
+    },
+    {
+     "role": "student",
+     "kind": "correction_plan",
+     "content": "C 修正方案：不能跳过坏块继续读取后面的字节，因为 CRC 和长度字段只能证明当前块完整，坏块后的偏移边界不可信，继续读可能把后续字节误解释成新记录；下一次我会在坏块后人为放一个完整事务，验证恢复是否仍停止在坏块前。"
+    },
+    {
+     "role": "student",
+     "kind": "retest_prediction2",
+     "content": "D 复测预测：复测前我预期第一个事务损坏时 rows 仍为 `[]`，即使后面放完整事务也不会恢复，因为恢复在第一个 CRC 不匹配处停止，不能确认后续边界。"
+    },
+    {
+     "role": "tool",
+     "kind": "retest_result",
+     "content": "Q24_BLOCK1 offset 0x8d rows []; Q24_BLOCK2 offset 0x15e rows [[1]]; data file is rows_0.dat",
+     "executed_by": "agent",
+     "environment": "Linux/WSL 本机复测：分别翻转 id1 与 id2/id3 块"
+    },
+    {
+     "role": "student",
+     "kind": "retest_explanation",
+     "content": "E 复测结果解释：复测实际再次翻转 `rows_0.dat` 偏移 `0x8d` 后 rows 为 `[]`，翻转偏移 `0x15e` 后 rows 为 `[[1]]`，与第一次一致。这说明损坏点之后的数据不能作为可信恢复依据；局限是还没有覆盖坏块落在块头导致长度字段不可读的情况。"
+    }
+   ],
+   "note": "A(3).md 复测轮：该文档自述 B、E 已按本机复测结果修订，A、C、D 为复测前所写。"
+  },
+  {
+   "id": "Q25",
+   "topic": "checkpoint 与索引元数据：checkpoint 重写文件时，CREATE VECTOR INDEX 的元数据应该怎么保留？",
+   "student_timing": "没有留下实验前预测；判断与结果解释同轮撰写。",
+   "turns": [
+    {
+     "role": "agent",
+     "kind": "question",
+     "content": "checkpoint 与索引元数据：checkpoint 重写文件时，CREATE VECTOR INDEX 的元数据应该怎么保留？"
+    },
+    {
+     "role": "student",
+     "kind": "judgement",
+     "content": "判断：checkpoint 必须把向量索引定义作为表元数据一起写入，不能只保存行。"
+    },
+    {
+     "role": "tool",
+     "kind": "result",
+     "content": "FILES_AFTER_CHECKPOINT [\"catalog.dat\",\"rows_1.dat\"]\nCATALOG \"MVDB-CATALOG-1\\nepoch 1\\nfile rows_1.dat\\n\"\nAFTER_CHECKPOINT_RESTART {\"ok\":true,\"columns\":[\"id\",\"cat\"],\"rows\":[[15000,\"u3\"]]}\nTOPK_AFTER_CHECKPOINT {\"ok\":true,\"columns\":[\"id\",\"d\"],\"rows\":[[1,0.0],[2,0.0]]}\nINDEX_AFTER_RESTART {\"ok\":false,\"error\":{\"code\":\"index_exists\",\"message\":\"index already exists\"}}",
+     "executed_by": "student",
+     "environment": "Windows/MSVC 构建，学生在自己机器上运行并保存日志"
+    },
+    {
+     "role": "student",
+     "kind": "explanation",
+     "content": "结果后解释：`index_exists` 证明索引元数据跨 checkpoint 和重启保留。否则重启可能把索引静默丢掉，虽然精确结果仍可能正确，但元数据语义和后续索引维护会出错。"
+    }
+   ]
+  },
+  {
+   "id": "Q26",
+   "topic": "多表重启：多个表分别有数据和一个索引，重启后表、行和索引元数据应该怎样恢复？",
+   "student_timing": "没有留下实验前预测；判断与结果解释同轮撰写。",
+   "turns": [
+    {
+     "role": "agent",
+     "kind": "question",
+     "content": "多表重启：多个表分别有数据和一个索引，重启后表、行和索引元数据应该怎样恢复？"
+    },
+    {
+     "role": "student",
+     "kind": "judgement",
+     "content": "判断：多表恢复必须分别保留每张表的 schema、行和索引，不能只恢复最后一张表。"
+    },
+    {
+     "role": "tool",
+     "kind": "result",
+     "content": "CREATE_A {\"ok\":true}\nCREATE_B {\"ok\":true}\nINSERT_A {\"ok\":true,\"affected_rows\":1}\nINSERT_B {\"ok\":true,\"affected_rows\":1}\nINDEX_A {\"ok\":true}\nINDEX_B {\"ok\":true}\nROWS_A_BEFORE {\"ok\":true,\"columns\":[\"id\",\"v\"],\"rows\":[[1,[0.0,0.0]]]}\nROWS_B_BEFORE {\"ok\":true,\"columns\":[\"id\",\"v\"],\"rows\":[[2,[1.0,0.0]]]}\nRESTART true\nROWS_A_AFTER {\"ok\":true,\"columns\":[\"id\",\"v\"],\"rows\":[[1,[0.0,0.0]]]}\nROWS_B_AFTER {\"ok\":true,\"columns\":[\"id\",\"v\"],\"rows\":[[2,[1.0,0.0]]]}\nINDEX_A_AFTER {\"ok\":false,\"error\":{\"code\":\"index_exists\",\"message\":\"index already exists\"}}\nINDEX_B_AFTER {\"ok\":false,\"error\":{\"code\":\"index_exists\",\"message\":\"index already exists\"}}",
+     "executed_by": "student",
+     "environment": "Windows/MSVC 构建，学生在自己机器上运行并保存日志"
+    },
+    {
+     "role": "student",
+     "kind": "explanation",
+     "content": "结果后解释：两张表的行和索引定义均独立恢复，没有相互覆盖。重启前后 SELECT * 的向量 JSON 表示也保持一致。"
+    }
+   ]
+  },
+  {
+   "id": "Q27",
+   "topic": "删除全部后重启：一张表删光所有行后重启，表和空结果应该是什么状态？",
+   "student_timing": "没有留下实验前预测；判断与结果解释同轮撰写。",
+   "turns": [
+    {
+     "role": "agent",
+     "kind": "question",
+     "content": "删除全部后重启：一张表删光所有行后重启，表和空结果应该是什么状态？"
+    },
+    {
+     "role": "student",
+     "kind": "judgement",
+     "content": "判断：删除全部行不等于删除表，重启后表必须存在且查询为空，还应能继续插入。"
+    },
+    {
+     "role": "tool",
+     "kind": "result",
+     "content": "CREATE {\"ok\":true}\nINSERT {\"ok\":true,\"affected_rows\":2}\nDELETE_ALL {\"ok\":true,\"affected_rows\":2}\nBEFORE_RESTART {\"ok\":true,\"columns\":[\"id\"],\"rows\":[]}\nRESTART true\nAFTER_RESTART {\"ok\":true,\"columns\":[\"id\"],\"rows\":[]}\nINSERT_AFTER_RESTART {\"ok\":true,\"affected_rows\":1}\nFINAL_ROWS {\"ok\":true,\"columns\":[\"id\"],\"rows\":[[3]]}",
+     "executed_by": "student",
+     "environment": "Windows/MSVC 构建，学生在自己机器上运行并保存日志"
+    },
+    {
+     "role": "student",
+     "kind": "explanation",
+     "content": "结果后解释：空行集合与表不存在是两种不同状态。能查询并成功插入证明 schema 和表元数据仍然存在。"
+    }
+   ]
+  },
+  {
+   "id": "Q28",
+   "topic": "未提交事务崩溃：显式事务中改了多行但还没 COMMIT，进程被强杀，重启后应该看到哪些修改？",
+   "student_timing": "没有留下实验前预测；判断与结果解释同轮撰写。",
+   "turns": [
+    {
+     "role": "agent",
+     "kind": "question",
+     "content": "未提交事务崩溃：显式事务中改了多行但还没 COMMIT，进程被强杀，重启后应该看到哪些修改？"
+    },
+    {
+     "role": "student",
+     "kind": "judgement",
+     "content": "判断：未提交事务中的 UPDATE、INSERT、DELETE 在崩溃后都必须整体消失。"
+    },
+    {
+     "role": "tool",
+     "kind": "result",
+     "content": "KILL_UNCOMMITTED 1\nROWS_AFTER_RESTART {\"ok\":true,\"columns\":[\"id\",\"v\"],\"rows\":[[1,\"old\"],[2,\"keep\"]]}",
+     "executed_by": "student",
+     "environment": "Windows/MSVC 构建，学生在自己机器上运行并保存日志"
+    },
+    {
+     "role": "student",
+     "kind": "explanation",
+     "content": "结果后解释：三种修改都没有部分生效，说明恢复边界是整个事务而不是单条 SQL。已提交旧版本保持原样。"
+    }
+   ]
+  },
+  {
+   "id": "Q29",
+   "topic": "/data 目录文件：程序运行时允许写哪些文件，为什么不能把临时文件写到根文件系统？",
+   "student_timing": "没有留下实验前预测；判断与结果解释同轮撰写。",
+   "turns": [
+    {
+     "role": "agent",
+     "kind": "question",
+     "content": "/data 目录文件：程序运行时允许写哪些文件，为什么不能把临时文件写到根文件系统？"
+    },
+    {
+     "role": "student",
+     "kind": "judgement",
+     "content": "判断：持久化文件和临时切换文件都应限制在数据目录内，不能依赖可写根文件系统。"
+    },
+    {
+     "role": "tool",
+     "kind": "result",
+     "content": "FILES_DURING_RUN [\"data\",\"data\\\\catalog.dat\",\"data\\\\rows_0.dat\"]\nFILES_AFTER_SHUTDOWN [\"data\",\"data\\\\catalog.dat\",\"data\\\\rows_0.dat\"]",
+     "executed_by": "student",
+     "environment": "Windows/MSVC 构建，学生在自己机器上运行并保存日志"
+    },
+    {
+     "role": "student",
+     "kind": "explanation",
+     "content": "结果后解释：当前实现把 catalog、活动日志及 checkpoint 相关文件放在 `/data` 对应的数据目录。根文件系统在评测容器中可能只读，写 `/tmp`、程序目录或 `/` 会导致本可正常运行的数据库因权限错误失败。"
+    }
+   ]
+  },
+  {
+   "id": "Q30",
+   "topic": "向量维度不匹配：插入向量维度与列定义不一致时，应该写入部分数据还是整条语句失败？",
+   "student_timing": "没有留下实验前预测；判断与结果解释同轮撰写。",
+   "turns": [
+    {
+     "role": "agent",
+     "kind": "question",
+     "content": "向量维度不匹配：插入向量维度与列定义不一致时，应该写入部分数据还是整条语句失败？"
+    },
+    {
+     "role": "student",
+     "kind": "judgement",
+     "content": "判断：一批 INSERT 中只要有一个向量维度不匹配，就应整条语句失败。"
+    },
+    {
+     "role": "tool",
+     "kind": "result",
+     "content": "CREATE {\"ok\":true}\nDIMENSION_MISMATCH {\"ok\":false,\"error\":{\"code\":\"dimension_mismatch\",\"message\":\"vector dimension does not match column\"}}\nROWS {\"ok\":true,\"columns\":[\"id\"],\"rows\":[]}",
+     "executed_by": "student",
+     "environment": "Windows/MSVC 构建，学生在自己机器上运行并保存日志"
+    },
+    {
+     "role": "student",
+     "kind": "explanation",
+     "content": "结果后解释：维度校验是语句接收的一部分，失败前没有写入前两行。否则表中会留下调用方认为失败的半批数据，也破坏多行 INSERT 原子性。"
+    }
+   ]
+  },
+  {
+   "id": "Q31",
+   "topic": "NaN、Infinity 和 float32 溢出：这三类值分别应该在解析、转换还是存储阶段拒绝，为什么？",
+   "student_timing": "没有留下实验前预测；判断与结果解释同轮撰写。",
+   "turns": [
+    {
+     "role": "agent",
+     "kind": "question",
+     "content": "NaN、Infinity 和 float32 溢出：这三类值分别应该在解析、转换还是存储阶段拒绝，为什么？"
+    },
+    {
+     "role": "student",
+     "kind": "judgement",
+     "content": "判断：NaN、Infinity 和 float32 转换溢出都不能入库，但错误阶段和消息可以不同。"
+    },
+    {
+     "role": "tool",
+     "kind": "result",
+     "content": "CREATE {\"ok\":true}\nNAN {\"ok\":false,\"error\":{\"code\":\"invalid_vector\",\"message\":\"vector component must be finite\"}}\nINFINITY {\"ok\":false,\"error\":{\"code\":\"invalid_vector\",\"message\":\"vector component must be finite\"}}\nOVERFLOW {\"ok\":false,\"error\":{\"code\":\"invalid_vector\",\"message\":\"vector component is not a finite float32\"}}\nROWS {\"ok\":true,\"columns\":[\"id\"],\"rows\":[]}",
+     "executed_by": "student",
+     "environment": "Windows/MSVC 构建，学生在自己机器上运行并保存日志"
+    },
+    {
+     "role": "student",
+     "kind": "explanation",
+     "content": "结果后解释：前两者在数值有限性检查时被拒绝，1e39 本身是有限 double，但转换为 float32 会溢出，因此在转换边界被拒绝。三类值若进入距离计算，会传播非有限结果并破坏排序全序。"
+    }
+   ]
+  },
+  {
+   "id": "Q32",
+   "topic": "过滤 TopK 的召回：过滤后只剩少量行时，TopK 应该返回多少条，为什么不能先在全表取 K 条再过滤？",
+   "student_timing": "没有留下实验前预测；判断与结果解释同轮撰写。",
+   "turns": [
+    {
+     "role": "agent",
+     "kind": "question",
+     "content": "过滤 TopK 的召回：过滤后只剩少量行时，TopK 应该返回多少条，为什么不能先在全表取 K 条再过滤？"
+    },
+    {
+     "role": "student",
+     "kind": "judgement",
+     "content": "判断：过滤后只有一行时，即使 LIMIT 2 也只能返回这一行，exact 和 ann 都不能从其他分类补行。"
+    },
+    {
+     "role": "tool",
+     "kind": "result",
+     "content": "CREATE {\"ok\":true}\nINSERT {\"ok\":true,\"affected_rows\":3}\nFILTERED_K2 {\"ok\":true,\"columns\":[\"id\"],\"rows\":[[3]]}\nANN_FILTERED_K2 {\"ok\":true,\"columns\":[\"id\"],\"rows\":[[3]]}",
+     "executed_by": "student",
+     "environment": "Windows/MSVC 构建，学生在自己机器上运行并保存日志"
+    },
+    {
+     "role": "student",
+     "kind": "explanation",
+     "content": "结果后解释：WHERE 先确定候选集，LIMIT 只是上限。ann 模式也不能以召回为理由返回不满足过滤条件的近似候选。"
+    },
+    {
+     "role": "student",
+     "kind": "retest_prediction",
+     "content": "A 复测前预测：我预期过滤后 0 行、1 行、正好 K=2 行、K+1=3 行四组数据，exact 和 ann 的 `LIMIT 2` 分别返回 0、1、2、2 行；WHERE 先决定候选集，LIMIT 只是上限。"
+    },
+    {
+     "role": "student",
+     "kind": "first_explanation",
+     "content": "B 第一次结果解释：实际 exact 四组返回行数为 `0,1,2,2`，ann 四组也返回 `0,1,2,2`。过滤后 1 行时没有补全表其他记录，过滤后 3 行时只返回 2 行，说明返回数量受过滤后集合大小和 LIMIT 共同限制。"
+    },
+    {
+     "role": "student",
+     "kind": "correction_plan",
+     "content": "C 修正方案：如果实现先在全表取 K 条再过滤，过滤后 1 行这一组会最先出错，因为全表 Top2 可能都不满足 WHERE，过滤后变成 0 行而不是 1 行；下一次我会构造全表前两条都不满足过滤、第三条才满足的数据，专门检查是否错误返回空集。"
+    },
+    {
+     "role": "student",
+     "kind": "retest_prediction2",
+     "content": "D 复测预测：复测前我预期 ann 在过滤后 0 行时返回空结果 0 行，不报错也不返回全表记录；因为候选集为空时 TopK 应为空。"
+    },
+    {
+     "role": "tool",
+     "kind": "retest_result",
+     "content": "Q32_COUNTS exact=[0,1,2,2] ann=[0,1,2,2]",
+     "executed_by": "agent",
+     "environment": "Linux/WSL 本机复测：过滤后 0/1/K/K+1 四组数据"
+    },
+    {
+     "role": "student",
+     "kind": "retest_explanation",
+     "content": "E 复测结果解释：复测实际 ann 在过滤后 0 行时返回 0 行空集，过滤后 1 行时返回该 1 行。这支持“WHERE 决定候选集，LIMIT 只是上限”；局限是还没有测 K 大于候选集且候选集为 0 的召回率统计路径。"
+    }
+   ],
+   "note": "A(3).md 复测轮：该文档自述 B、E 已按本机复测结果修订，A、C、D 为复测前所写。"
+  },
+  {
+   "id": "Q33",
+   "topic": "ann 模式的 recall：当前 ann 模式返回精确结果，这样做 Recall@10 是多少，代价是什么？",
+   "student_timing": "没有留下实验前预测；判断与结果解释同轮撰写。",
+   "turns": [
+    {
+     "role": "agent",
+     "kind": "question",
+     "content": "ann 模式的 recall：当前 ann 模式返回精确结果，这样做 Recall@10 是多少，代价是什么？"
+    },
+    {
+     "role": "student",
+     "kind": "judgement",
+     "content": "判断：若 ann 路径与 exact 返回完全相同的 TopK，则 Recall@10 为 1.0，但代价是保留精确扫描的计算成本。"
+    },
+    {
+     "role": "tool",
+     "kind": "result",
+     "content": "ANN_RECALL {\"queries\":20,\"nonempty\":20,\"recall_at_10\":1.0,\"exact_seconds\":0.0012954999692738056,\"ann_seconds\":0.0012392000353429466}",
+     "executed_by": "student",
+     "environment": "Windows/MSVC 构建，学生在自己机器上运行并保存日志"
+    },
+    {
+     "role": "student",
+     "kind": "explanation",
+     "content": "结果后解释：本组小数据上两者结果一致，因此召回率为 100%。耗时只是本机诊断，ann 没有近似索引带来的确定加速优势；它用潜在查询成本换取精确召回，不能据此宣称官方性能表现。"
+    },
+    {
+     "role": "student",
+     "kind": "retest_prediction",
+     "content": "A 复测前预测：我预期数据从 200 行扩大到 2000 行后，如果 ann 仍回退精确扫描，Recall@10 仍为 1.0，exact 和 ann 耗时接近，内存会随数据量上升。"
+    },
+    {
+     "role": "student",
+     "kind": "first_explanation",
+     "content": "B 第一次结果解释：实际 2000 行、20 个查询时 Recall@10 为 1.0；exact 约 0.003512 秒，ann 约 0.003004 秒。ann 略快于 exact，但差距很小，说明当前 ann 还没有体现出明显近似索引加速。"
+    },
+    {
+     "role": "student",
+     "kind": "correction_plan",
+     "content": "C 修正方案：如果 ann 仍是精确扫描，扩大规模后它的代价会线性增长，主要花在全量距离计算和候选维护上，没有索引剪枝收益；下一次我会把数据扩到 10000 行并记录 exact/ann 的耗时比，判断当前 ann 是否只是回退路径。"
+    },
+    {
+     "role": "student",
+     "kind": "retest_prediction2",
+     "content": "D 复测预测：复测前我预期 2000 行时召回率仍为 1.0，因为当前 ann 实际仍按精确扫描返回结果；耗时仍接近 exact，内存继续上升。"
+    },
+    {
+     "role": "tool",
+     "kind": "retest_result",
+     "content": "Q33 exact=0.003921s ann=0.002831s recall_at_10=1.0 queries=20",
+     "executed_by": "agent",
+     "environment": "Linux/WSL 本机复测：2000 行、20 个查询"
+    },
+    {
+     "role": "student",
+     "kind": "retest_explanation",
+     "content": "E 复测结果解释：复测实际 Recall@10 为 1.0，exact 约 0.003512 秒，ann 约 0.003004 秒，ann 略快但差距小。这支持当前“精确优先”的取舍；局限是还没有实现真正 ANN，不能证明大规模下近似索引的优势。"
+    }
+   ],
+   "note": "A(3).md 复测轮：该文档自述 B、E 已按本机复测结果修订，A、C、D 为复测前所写。"
+  },
+  {
+   "id": "Q34",
+   "topic": "索引维护后的查询：CREATE VECTOR INDEX 后更新和删除向量，再查询，结果应该反映新数据还是索引建立时的旧数据？",
+   "student_timing": "没有留下实验前预测；判断与结果解释同轮撰写。",
+   "turns": [
+    {
+     "role": "agent",
+     "kind": "question",
+     "content": "索引维护后的查询：CREATE VECTOR INDEX 后更新和删除向量，再查询，结果应该反映新数据还是索引建立时的旧数据？"
+    },
+    {
+     "role": "student",
+     "kind": "judgement",
+     "content": "判断：建索引后的 UPDATE 和 DELETE 必须同步维护查询可见状态，不能返回旧向量或已删除行。"
+    },
+    {
+     "role": "tool",
+     "kind": "result",
+     "content": "CREATE {\"ok\":true}\nINSERT {\"ok\":true,\"affected_rows\":3}\nINDEX {\"ok\":true}\nUPDATE {\"ok\":true,\"affected_rows\":1}\nDELETE {\"ok\":true,\"affected_rows\":1}\nTOPK_AFTER_MAINTENANCE {\"ok\":true,\"columns\":[\"id\",\"d\"],\"rows\":[[3,2.0],[1,10.0]]}",
+     "executed_by": "student",
+     "environment": "Windows/MSVC 构建，学生在自己机器上运行并保存日志"
+    },
+    {
+     "role": "student",
+     "kind": "explanation",
+     "content": "结果后解释：id 2 消失且 id 1 使用新距离，说明结果反映当前数据而不是建索引时快照。索引只是访问结构，不能改变 SQL 数据语义。"
+    }
+   ]
+  },
+  {
+   "id": "Q36",
+   "topic": "连续向量缓存失效：更新一行向量后，下一次 TopK 是否会用到旧缓存，代码需要做什么？",
+   "student_timing": "没有留下实验前预测；判断与结果解释同轮撰写。",
+   "turns": [
+    {
+     "role": "agent",
+     "kind": "question",
+     "content": "连续向量缓存失效：更新一行向量后，下一次 TopK 是否会用到旧缓存，代码需要做什么？"
+    },
+    {
+     "role": "student",
+     "kind": "judgement",
+     "content": "判断：向量更新或删除后必须使连续向量缓存失效或同步维护，下一次 TopK 不能复用旧内容。"
+    },
+    {
+     "role": "tool",
+     "kind": "result",
+     "content": "BEFORE_UPDATE {\"ok\":true,\"columns\":[\"id\",\"d\"],\"rows\":[[0,0.0],[1,2.8284271247461903]]}\nAFTER_UPDATE {\"ok\":true,\"columns\":[\"id\",\"d\"],\"rows\":[[1,2.8284271247461903],[2,5.656854249492381]]}\nAFTER_DELETE {\"ok\":true,\"columns\":[\"id\",\"d\"],\"rows\":[[2,5.656854249492381],[3,8.48528137423857]]}",
+     "executed_by": "student",
+     "environment": "Windows/MSVC 构建，学生在自己机器上运行并保存日志"
+    },
+    {
+     "role": "student",
+     "kind": "explanation",
+     "content": "结果后解释：每次结果都立即反映最新行版本，没有沿用旧缓存。实现需要在写操作后使相关缓存代次失效，并确保 TopK 重新扫描或读取已维护的新数据。"
+    }
+   ]
+  },
+  {
+   "id": "Q37",
+   "topic": "无 ORDER BY 的 LIMIT 提前停止：什么条件下可以提前停止扫描，结果语义如何保证？",
+   "student_timing": "没有留下实验前预测；判断与结果解释同轮撰写。",
+   "turns": [
+    {
+     "role": "agent",
+     "kind": "question",
+     "content": "无 ORDER BY 的 LIMIT 提前停止：什么条件下可以提前停止扫描，结果语义如何保证？"
+    },
+    {
+     "role": "student",
+     "kind": "judgement",
+     "content": "判断：无 ORDER BY 且只需要普通列时，可以在过滤后收集到 LIMIT 行就停止；有 ORDER BY 时通常必须确定完整排序边界。"
+    },
+    {
+     "role": "tool",
+     "kind": "result",
+     "content": "CREATE {\"ok\":true}\nINSERT {\"ok\":true,\"affected_rows\":5}\nLIMIT_EARLY {\"ok\":true,\"columns\":[\"id\"],\"rows\":[[10],[20],[30]]}\nLIMIT_WITH_FILTER {\"ok\":true,\"columns\":[\"id\"],\"rows\":[[20],[30],[40]]}\nLIMIT_ORDERED {\"ok\":true,\"columns\":[\"id\"],\"rows\":[[50],[40]]}",
+     "executed_by": "student",
+     "environment": "Windows/MSVC 构建，学生在自己机器上运行并保存日志"
+    },
+    {
+     "role": "student",
+     "kind": "explanation",
+     "content": "结果后解释：前两种查询不要求全局排名，提前停止只改变未指定的扫描代价，不改变合法结果语义。第三种若提前停止会错误得到较小 id，必须先保证排序或维护正确的全局 TopK。"
+    }
+   ]
+  },
+  {
+   "id": "Q40",
+   "topic": "Docker 只读根文件系统：根文件系统只读时程序允许写哪里，入口脚本如何选择 generic 和 AVX2 二进制？",
+   "student_timing": "没有留下实验前预测；判断与结果解释同轮撰写。",
+   "turns": [
+    {
+     "role": "agent",
+     "kind": "question",
+     "content": "Docker 只读根文件系统：根文件系统只读时程序允许写哪里，入口脚本如何选择 generic 和 AVX2 二进制？"
+    },
+    {
+     "role": "student",
+     "kind": "judgement",
+     "content": "判断：容器内只应写 `/data`；入口脚本应在 CPU 同时支持 AVX2 和 FMA 时选择优化二进制，否则使用 generic。"
+    },
+    {
+     "role": "tool",
+     "kind": "result",
+     "content": "ENTRYPOINT_INSPECTION {\"avx2_guard\":true,\"fma_guard\":true,\"generic_fallback\":true,\"data_volume\":true}\nDOCKER_RUNTIME {\"status\":\"NOT_RUN\",\"reason\":\"本机没有 docker 命令，Windows 不能验证 Linux 只读根文件系统；未伪造运行结果。\"}",
+     "executed_by": "student",
+     "environment": "Windows/MSVC 构建，学生在自己机器上运行并保存日志"
+    },
+    {
+     "role": "student",
+     "kind": "limitation",
+     "content": "环境限制：本机没有 Docker，本轮 `DOCKER_RUNTIME:NOT_RUN`，没有声称重新验证 Linux 只读根文件系统或 AVX2 容器运行。静态检查通过不等于容器运行时测试通过。"
+    },
+    {
+     "role": "student",
+     "kind": "retest_prediction",
+     "content": "A 复测前预测：我预期入口脚本选择的 AVX2 二进制和直接运行 generic 二进制对同一距离查询响应一致；只读根文件系统加 `/data` 卷时，写入只应落在 `/data`，`/data` 下应出现 `catalog.dat` 和 `rows_0.dat`。"
+    },
+    {
+     "role": "student",
+     "kind": "first_explanation",
+     "content": "B 第一次结果解释：实际用只读根文件系统加 `/data` 卷启动成功，AVX2 二进制和 generic 二进制对同一距离查询都输出 `[[1,1]]`；`/data` 下只有 `catalog.dat` 和 `rows_0.dat`，没有 `wal.log`，根文件系统只读没有导致写入失败。"
+    },
+    {
+     "role": "student",
+     "kind": "correction_plan",
+     "content": "C 修正方案：如果没有 AVX2 或 FMA，入口脚本应检查 `/proc/cpuinfo` 的 flags，缺少 `avx2` 或 `fma` 时回退执行 generic 二进制；下一次我会用环境变量强制走 generic 分支，验证回退条件不是只看文件是否存在。"
+    },
+    {
+     "role": "student",
+     "kind": "retest_prediction2",
+     "content": "D 复测预测：复测前我预期 generic 二进制的查询结果与 AVX2 完全一致，仍输出 `[[1,1]]`，因为两者只是指令集优化不同，SQL 和存储语义应相同。"
+    },
+    {
+     "role": "tool",
+     "kind": "retest_result",
+     "content": "Q40 ready; query rows [[1,1]]; files catalog.dat rows_0.dat; AVX2=present FMA=present both binaries present; no wal.log",
+     "executed_by": "agent",
+     "environment": "Linux Docker：只读根文件系统 + /data 卷"
+    },
+    {
+     "role": "student",
+     "kind": "retest_explanation",
+     "content": "E 复测结果解释：复测实际 generic 对同一查询仍输出 `[[1,1]]`，`/data` 下仍只有 `catalog.dat` 和 `rows_0.dat`，只读根文件系统下没有额外写入失败。这支持“按 CPU 能力选择二进制”；局限是还没有在真实缺少 AVX2/FMA 的机器上运行验证。"
+    }
+   ],
+   "note": "A(3).md 复测轮：该文档自述 B、E 已按本机复测结果修订，A、C、D 为复测前所写。"
+  },
+  {
+   "id": "Q41",
+   "topic": "标识符大小写：CREATE TABLE T 之后执行 SELECT id FROM t，表名和列名大小写不敏感还是要完全一致？",
+   "student_timing": "没有留下实验前预测；判断与结果解释同轮撰写。",
+   "turns": [
+    {
+     "role": "agent",
+     "kind": "question",
+     "content": "标识符大小写：CREATE TABLE T 之后执行 SELECT id FROM t，表名和列名大小写不敏感还是要完全一致？"
+    },
+    {
+     "role": "student",
+     "kind": "judgement",
+     "content": "判断：当前 SQL 标识符按大小写不敏感查找，但输出列名可保留建表时的原始拼写。"
+    },
+    {
+     "role": "tool",
+     "kind": "result",
+     "content": "CREATE_UPPER {\"ok\":true}\nINSERT_MIXED {\"ok\":true,\"affected_rows\":1}\nSELECT_LOWER {\"ok\":true,\"columns\":[\"ID\",\"Name\"],\"rows\":[[1,\"a\"]]}",
+     "executed_by": "student",
+     "environment": "Windows/MSVC 构建，学生在自己机器上运行并保存日志"
+    },
+    {
+     "role": "student",
+     "kind": "explanation",
+     "content": "结果后解释：大小写不敏感的是名称解析，不要求元数据显示名也被改成小写。因此 SELECT 能执行，同时 columns 保留 `ID`、`Name`。"
+    }
+   ]
+  },
+  {
+   "id": "Q42",
+   "topic": "反引号标识符：表名或列名里带空格、关键字时，反引号是否应该支持？",
+   "student_timing": "没有留下实验前预测；判断与结果解释同轮撰写。",
+   "turns": [
+    {
+     "role": "agent",
+     "kind": "question",
+     "content": "反引号标识符：表名或列名里带空格、关键字时，反引号是否应该支持？"
+    },
+    {
+     "role": "student",
+     "kind": "judgement",
+     "content": "判断：反引号应允许空格和关键字作为标识符，而不是把它们当普通 SQL 分词或语法关键字。"
+    },
+    {
+     "role": "tool",
+     "kind": "result",
+     "content": "CREATE_BACKTICK {\"ok\":true}\nINSERT_BACKTICK {\"ok\":true,\"affected_rows\":1}\nSELECT_BACKTICK {\"ok\":true,\"columns\":[\"select\",\"my col\"],\"rows\":[[1,\"a\"]]}",
+     "executed_by": "student",
+     "environment": "Windows/MSVC 构建，学生在自己机器上运行并保存日志"
+    },
+    {
+     "role": "student",
+     "kind": "explanation",
+     "content": "结果后解释：反引号内的内容被作为完整标识符处理，所以关键字列和带空格表/列都可使用。输出名称不包含反引号本身。"
+    }
+   ]
+  },
+  {
+   "id": "Q43",
+   "topic": "SQL 注释：一行里出现两个减号、井号或斜杠星号注释时，解析器应该跳过注释还是报错？",
+   "student_timing": "没有留下实验前预测；判断与结果解释同轮撰写。",
+   "turns": [
+    {
+     "role": "agent",
+     "kind": "question",
+     "content": "SQL 注释：一行里出现两个减号、井号或斜杠星号注释时，解析器应该跳过注释还是报错？"
+    },
+    {
+     "role": "student",
+     "kind": "judgement",
+     "content": "判断：解析器应跳过 `--`、`#` 和 `/* ... */` 三种注释，而不是把注释文本当成 SQL。"
+    },
+    {
+     "role": "tool",
+     "kind": "result",
+     "content": "CREATE {\"ok\":true}\nDASH_COMMENT {\"ok\":true,\"affected_rows\":1}\nHASH_COMMENT {\"ok\":true,\"affected_rows\":1}\nBLOCK_COMMENT {\"ok\":true,\"affected_rows\":1}\nROWS {\"ok\":true,\"columns\":[\"id\"],\"rows\":[[1],[2],[3]]}",
+     "executed_by": "student",
+     "environment": "Windows/MSVC 构建，学生在自己机器上运行并保存日志"
+    },
+    {
+     "role": "student",
+     "kind": "explanation",
+     "content": "结果后解释：三种形式均在词法阶段被忽略，注释没有改变前面的语句，也没有产生额外错误。"
+    }
+   ]
+  },
+  {
+   "id": "Q44",
+   "topic": "字面量在左的比较：WHERE 5 < id 和 WHERE id > 5 是否应该得到同一批行？",
+   "student_timing": "没有留下实验前预测；判断与结果解释同轮撰写。",
+   "turns": [
+    {
+     "role": "agent",
+     "kind": "question",
+     "content": "字面量在左的比较：WHERE 5 < id 和 WHERE id > 5 是否应该得到同一批行？"
+    },
+    {
+     "role": "student",
+     "kind": "judgement",
+     "content": "判断：`5 < id` 与 `id > 5` 是比较方向等价写法，应产生相同结果。"
+    },
+    {
+     "role": "tool",
+     "kind": "result",
+     "content": "CREATE {\"ok\":true}\nINSERT {\"ok\":true,\"affected_rows\":3}\nLITERAL_LEFT {\"ok\":true,\"columns\":[\"id\"],\"rows\":[[6]]}\nCOLUMN_LEFT {\"ok\":true,\"columns\":[\"id\"],\"rows\":[[6]]}",
+     "executed_by": "student",
+     "environment": "Windows/MSVC 构建，学生在自己机器上运行并保存日志"
+    },
+    {
+     "role": "student",
+     "kind": "explanation",
+     "content": "结果后解释：解析器不能只支持“列在左、字面量在右”的模板；它需要根据操作数和比较方向构造等价谓词。"
+    }
+   ]
+  },
+  {
+   "id": "Q45",
+   "topic": "不等于比较：WHERE id <> 5 和 WHERE id != 5 是否都应该支持？",
+   "student_timing": "没有留下实验前预测；判断与结果解释同轮撰写。",
+   "turns": [
+    {
+     "role": "agent",
+     "kind": "question",
+     "content": "不等于比较：WHERE id <> 5 和 WHERE id != 5 是否都应该支持？"
+    },
+    {
+     "role": "student",
+     "kind": "judgement",
+     "content": "判断：SQL 标准的 `<>` 和常见的 `!=` 都应作为不等于处理。"
+    },
+    {
+     "role": "tool",
+     "kind": "result",
+     "content": "CREATE {\"ok\":true}\nINSERT {\"ok\":true,\"affected_rows\":3}\nNOT_EQUAL_ANGLE {\"ok\":true,\"columns\":[\"id\"],\"rows\":[[4],[6]]}\nNOT_EQUAL_BANG {\"ok\":true,\"columns\":[\"id\"],\"rows\":[[4],[6]]}",
+     "executed_by": "student",
+     "environment": "Windows/MSVC 构建，学生在自己机器上运行并保存日志"
+    },
+    {
+     "role": "student",
+     "kind": "explanation",
+     "content": "结果后解释：两个操作符语义一致，结果集与排序也一致，不是只把其中一种当成未知字符报错。"
+    }
+   ]
+  },
+  {
+   "id": "Q46",
+   "topic": "多键 ORDER BY：ORDER BY cat, id DESC 时，cat 相同的行按什么顺序，cat 不同时按什么顺序？",
+   "student_timing": "没有留下实验前预测；判断与结果解释同轮撰写。",
+   "turns": [
+    {
+     "role": "agent",
+     "kind": "question",
+     "content": "多键 ORDER BY：ORDER BY cat, id DESC 时，cat 相同的行按什么顺序，cat 不同时按什么顺序？"
+    },
+    {
+     "role": "student",
+     "kind": "judgement",
+     "content": "判断：`ORDER BY cat,id DESC` 先按 cat 升序，再在同一 cat 内按 id 降序。"
+    },
+    {
+     "role": "tool",
+     "kind": "result",
+     "content": "CREATE {\"ok\":true}\nINSERT {\"ok\":true,\"affected_rows\":4}\nMULTI_KEY {\"ok\":true,\"columns\":[\"id\",\"cat\"],\"rows\":[[3,\"a\"],[2,\"a\"],[4,\"b\"],[1,\"b\"]]}",
+     "executed_by": "student",
+     "environment": "Windows/MSVC 构建，学生在自己机器上运行并保存日志"
+    },
+    {
+     "role": "student",
+     "kind": "explanation",
+     "content": "结果后解释：a 组排在 b 组前，每组内部 id 分别按 3→2、4→1 排列。多键排序中的显式 id DESC 取代默认主键升序平局规则。"
+    }
+   ]
+  },
+  {
+   "id": "Q47",
+   "topic": "LIMIT 0：SELECT id FROM t LIMIT 0 应该返回什么 columns 和 rows？",
+   "student_timing": "没有留下实验前预测；判断与结果解释同轮撰写。",
+   "turns": [
+    {
+     "role": "agent",
+     "kind": "question",
+     "content": "LIMIT 0：SELECT id FROM t LIMIT 0 应该返回什么 columns 和 rows？"
+    },
+    {
+     "role": "student",
+     "kind": "judgement",
+     "content": "判断：LIMIT 0 应保留结果 schema，但返回零行。"
+    },
+    {
+     "role": "tool",
+     "kind": "result",
+     "content": "CREATE {\"ok\":true}\nINSERT {\"ok\":true,\"affected_rows\":1}\nLIMIT_ZERO {\"ok\":true,\"columns\":[\"id\"],\"rows\":[]}",
+     "executed_by": "student",
+     "environment": "Windows/MSVC 构建，学生在自己机器上运行并保存日志"
+    },
+    {
+     "role": "student",
+     "kind": "explanation",
+     "content": "结果后解释：零行不意味着省略 columns，也不意味着表或列不存在。客户端仍可依据 columns 知道查询结构。"
+    }
+   ]
+  },
+  {
+   "id": "Q48",
+   "topic": "SELECT 星号含向量：SELECT * 遇到 VECTOR 列时，JSON 里应该是数组、字符串还是对象？",
+   "student_timing": "没有留下实验前预测；判断与结果解释同轮撰写。",
+   "turns": [
+    {
+     "role": "agent",
+     "kind": "question",
+     "content": "SELECT 星号含向量：SELECT * 遇到 VECTOR 列时，JSON 里应该是数组、字符串还是对象？"
+    },
+    {
+     "role": "student",
+     "kind": "judgement",
+     "content": "判断：SELECT * 中 VECTOR 列应编码为 JSON 数值数组，保持其向量类型结构。"
+    },
+    {
+     "role": "tool",
+     "kind": "result",
+     "content": "CREATE {\"ok\":true}\nINSERT {\"ok\":true,\"affected_rows\":1}\nSELECT_STAR {\"ok\":true,\"columns\":[\"id\",\"v\"],\"rows\":[[1,[1.5,2.5]]]}",
+     "executed_by": "student",
+     "environment": "Windows/MSVC 构建，学生在自己机器上运行并保存日志"
+    },
+    {
+     "role": "student",
+     "kind": "explanation",
+     "content": "结果后解释：向量不是字符串 `'[1.5,2.5]'`，也不是带分量键的对象。数组可直接表达维度和各分量数值。"
+    }
+   ]
+  },
+  {
+   "id": "Q49",
+   "topic": "未知列错误：SELECT 不存在的列时返回什么错误，之前已经成功执行的 INSERT 是否保留？",
+   "student_timing": "没有留下实验前预测；判断与结果解释同轮撰写。",
+   "turns": [
+    {
+     "role": "agent",
+     "kind": "question",
+     "content": "未知列错误：SELECT 不存在的列时返回什么错误，之前已经成功执行的 INSERT 是否保留？"
+    },
+    {
+     "role": "student",
+     "kind": "judgement",
+     "content": "判断：查询不存在的列应返回列不存在错误，且不能撤销之前已提交的 INSERT。"
+    },
+    {
+     "role": "tool",
+     "kind": "result",
+     "content": "CREATE {\"ok\":true}\nINSERT {\"ok\":true,\"affected_rows\":1}\nUNKNOWN_COLUMN {\"ok\":false,\"error\":{\"code\":\"column_not_found\",\"message\":\"column does not exist\"}}\nROWS_AFTER_ERROR {\"ok\":true,\"columns\":[\"id\"],\"rows\":[[1]]}",
+     "executed_by": "student",
+     "environment": "Windows/MSVC 构建，学生在自己机器上运行并保存日志"
+    },
+    {
+     "role": "student",
+     "kind": "explanation",
+     "content": "结果后解释：错误只影响当前 SELECT，没有修改数据，也不会隐式回滚此前自动提交语句。错误码与未知表、主键冲突能够明确区分。"
+    }
+   ]
+  },
+  {
+   "id": "Q50",
+   "topic": "嵌套 BEGIN：已经在事务里再执行 BEGIN，应该隐式提交、报错还是开启新事务？",
+   "student_timing": "没有留下实验前预测；判断与结果解释同轮撰写。",
+   "turns": [
+    {
+     "role": "agent",
+     "kind": "question",
+     "content": "嵌套 BEGIN：已经在事务里再执行 BEGIN，应该隐式提交、报错还是开启新事务？"
+    },
+    {
+     "role": "student",
+     "kind": "judgement",
+     "content": "判断：当前单事务模型不支持嵌套 BEGIN，第二次 BEGIN 应报错并保留原事务，而不是隐式提交。"
+    },
+    {
+     "role": "tool",
+     "kind": "result",
+     "content": "CREATE {\"ok\":true}\nBEGIN_OUTER {\"ok\":true}\nINSERT {\"ok\":true,\"affected_rows\":1}\nBEGIN_NESTED {\"ok\":false,\"error\":{\"code\":\"transaction_active\",\"message\":\"a transaction is already active\"}}\nCOMMIT {\"ok\":true}\nROWS {\"ok\":true,\"columns\":[\"id\"],\"rows\":[[1]]}",
+     "executed_by": "student",
+     "environment": "Windows/MSVC 构建，学生在自己机器上运行并保存日志"
+    },
+    {
+     "role": "student",
+     "kind": "explanation",
+     "content": "结果后解释：嵌套请求没有创建新事务，也没有把 id 1 提前提交或回滚。外层事务仍由原 COMMIT 结束，符合最多一个显式事务的约束。"
+    }
+   ]
+  },
+  {
+   "id": "C1",
+   "topic": "重启应该选旧活动文件还是文件名更新的半写文件。",
+   "note": "Agent 先给出迁移场景与实际输出，学生随后写 A、B、C 三段；A 段标题是学生自写的“迁移前预测”，按本记录顺序不作为前置预测。",
+   "turns": [
+    {
+     "role": "agent",
+     "kind": "question",
+     "content": "重启应该选旧活动文件还是文件名更新的半写文件。"
+    },
+    {
+     "role": "tool",
+     "kind": "result",
+     "content": "15,000 行数据触发一次 checkpoint，catalog 为 epoch=1、active=rows_1.dat。放入半写 rows_99.dat 后重启，仍读 rows_1.dat，rows_99.dat 被清理。用 SELECT id 查询得到 15,000 行。",
+     "executed_by": "agent",
+     "environment": "Linux/WSL 本机迁移实验"
+    },
+    {
+     "role": "student",
+     "kind": "transfer_prediction",
+     "content": "A 迁移前预测：半写的新数据文件不应被 catalog 选中，重启后仍应读取 checkpoint 已确认的活动文件，半写文件最多被清理；查询行数应与 checkpoint 时一致。"
+    },
+    {
+     "role": "student",
+     "kind": "transfer_explanation",
+     "content": "B 迁移结果解释：15,000 行触发一次 checkpoint 后，catalog 为 epoch=1、active=rows_1.dat；放入半写 rows_99.dat 重启，仍读 rows_1.dat，rows_99.dat 被清理，用 SELECT id 查询得到 15,000 行，说明活动文件选择依据是 catalog 而不是新文件时间。"
+    },
+    {
+     "role": "student",
+     "kind": "limitation",
+     "content": "C 局限：只覆盖单表单次 checkpoint 和一次半写文件，未验证目录 fsync 失败、连续多次崩溃及多表同时 checkpoint 时的活动版本选择。"
+    }
+   ]
+  },
+  {
+   "id": "C2",
+   "topic": "ROLLBACK 后表应该存在、消失，还是只回滚行。",
+   "note": "Agent 先给出迁移场景与实际输出，学生随后写 A、B、C 三段；A 段标题是学生自写的“迁移前预测”，按本记录顺序不作为前置预测。",
+   "turns": [
+    {
+     "role": "agent",
+     "kind": "question",
+     "content": "ROLLBACK 后表应该存在、消失，还是只回滚行。"
+    },
+    {
+     "role": "tool",
+     "kind": "result",
+     "content": "BEGIN 后 CREATE TABLE 成功；ROLLBACK 后 SELECT 返回 table_not_found；随后同名 CREATE TABLE 再次成功。",
+     "executed_by": "agent",
+     "environment": "Linux/WSL 本机迁移实验"
+    },
+    {
+     "role": "student",
+     "kind": "transfer_prediction",
+     "content": "A 迁移前预测：BEGIN 后 CREATE TABLE 成功，ROLLBACK 应撤销该 DDL，使表不可见；随后同名 CREATE TABLE 应能再次成功，不应残留表定义。"
+    },
+    {
+     "role": "student",
+     "kind": "transfer_explanation",
+     "content": "B 迁移结果解释：BEGIN 后 CREATE TABLE 成功；ROLLBACK 后 SELECT 返回 table_not_found；随后同名 CREATE TABLE 再次成功。说明 DDL 被纳入事务回滚，回滚后表定义没有残留，错误码 table_not_found 与预测一致。"
+    },
+    {
+     "role": "student",
+     "kind": "limitation",
+     "content": "C 局限：只验证 CREATE TABLE 的回滚，未覆盖 CREATE VECTOR INDEX、DDL 执行失败后事务是否仍可继续，以及重启后回滚结果是否保持。"
+    }
+   ]
+  },
+  {
+   "id": "C3",
+   "topic": "TopK 应该反映新向量，还是索引建立时的旧快照。",
+   "note": "Agent 先给出迁移场景与实际输出，学生随后写 A、B、C 三段；A 段标题是学生自写的“迁移前预测”，按本记录顺序不作为前置预测。",
+   "turns": [
+    {
+     "role": "agent",
+     "kind": "question",
+     "content": "TopK 应该反映新向量，还是索引建立时的旧快照。"
+    },
+    {
+     "role": "tool",
+     "kind": "result",
+     "content": "建索引后把 id 1 的向量改到距离 10，删除 id 2，TopK 返回 [[3,2.0],[1,10.0]]。id 2 消失，id 1 使用新距离。",
+     "executed_by": "agent",
+     "environment": "Linux/WSL 本机迁移实验"
+    },
+    {
+     "role": "student",
+     "kind": "transfer_prediction",
+     "content": "A 迁移前预测：建索引后更新 id 1 向量、删除 id 2，TopK 应反映新距离，id 1 距离变为 10，id 2 不再返回；索引不能保留旧向量或已删除记录。"
+    },
+    {
+     "role": "student",
+     "kind": "transfer_explanation",
+     "content": "B 迁移结果解释：实际 TopK 返回 [[3,2.0],[1,10.0]]，id 2 消失，id 1 使用新距离 10。说明更新和删除已正确反映到检索结果，返回记录与当前可见数据一致，没有出现旧距离或已删除 id。"
+    },
+    {
+     "role": "student",
+     "kind": "limitation",
+     "content": "C 局限：数据量较小，只覆盖一次更新和一次删除；未验证大量交错更新删除、索引重建前后一致性及过滤 TopK 下的索引维护。"
+    }
+   ]
+  },
+  {
+   "id": "C4",
+   "topic": "错误应该在解析、维度检查还是距离计算时出现，表数据是否受影响。",
+   "note": "Agent 先给出迁移场景与实际输出，学生随后写 A、B、C 三段；A 段标题是学生自写的“迁移前预测”，按本记录顺序不作为前置预测。",
+   "turns": [
+    {
+     "role": "agent",
+     "kind": "question",
+     "content": "错误应该在解析、维度检查还是距离计算时出现，表数据是否受影响。"
+    },
+    {
+     "role": "tool",
+     "kind": "result",
+     "content": "NaN 和 Infinity 返回 invalid_vector，1e39 返回 invalid_vector，查询失败后表数据不变。维度不匹配返回 dimension_mismatch。",
+     "executed_by": "agent",
+     "environment": "Linux/WSL 本机迁移实验"
+    },
+    {
+     "role": "student",
+     "kind": "transfer_prediction",
+     "content": "A 迁移前预测：查询向量为 NaN、Infinity 或 1e39 时应返回 invalid_vector；维度不匹配应返回 dimension_mismatch；查询失败不能修改表数据。"
+    },
+    {
+     "role": "student",
+     "kind": "transfer_explanation",
+     "content": "B 迁移结果解释：NaN 和 Infinity 返回 invalid_vector，1e39 返回 invalid_vector，维度不匹配返回 dimension_mismatch；查询失败后表数据不变。说明非法向量在查询阶段被拒绝，错误码能区分数值非法和维度不符。"
+    },
+    {
+     "role": "student",
+     "kind": "limitation",
+     "content": "C 局限：只覆盖查询侧非法向量，未验证插入和更新侧同类输入、过滤条件与非法向量组合时的报错顺序，以及失败查询后事务状态。"
+    }
+   ]
+  },
+  {
+   "id": "C5",
+   "topic": "cat 不同的行怎么排，cat 相同的行怎么排，DESC 是否替换默认的主键升序平局规则。",
+   "note": "Agent 先给出迁移场景与实际输出，学生随后写 A、B、C 三段；A 段标题是学生自写的“迁移前预测”，按本记录顺序不作为前置预测。",
+   "turns": [
+    {
+     "role": "agent",
+     "kind": "question",
+     "content": "cat 不同的行怎么排，cat 相同的行怎么排，DESC 是否替换默认的主键升序平局规则。"
+    },
+    {
+     "role": "tool",
+     "kind": "result",
+     "content": "ORDER BY cat,id DESC 返回 [[3,\"a\"],[2,\"a\"],[4,\"b\"],[1,\"b\"]]。",
+     "executed_by": "agent",
+     "environment": "Linux/WSL 本机迁移实验"
+    },
+    {
+     "role": "student",
+     "kind": "transfer_prediction",
+     "content": "A 迁移前预测：ORDER BY cat,id DESC 应先按 cat 升序，再在同一 cat 内按 id 降序；预期 a 组 id 3、2，b 组 id 4、1。"
+    },
+    {
+     "role": "student",
+     "kind": "transfer_explanation",
+     "content": "B 迁移结果解释：实际返回 [[3,“a”],[2,“a”],[4,“b”],[1,“b”]]，与预测一致。说明多键排序按第一键 cat 分组后，第二键 id DESC 生效，组内顺序为 3、2 和 4、1，没有把 DESC 误作用到 cat 上。"
+    },
+    {
+     "role": "student",
+     "kind": "limitation",
+     "content": "C 局限：只覆盖两键且第二键降序，未覆盖多列混合升降序、NULL 值、字符串并列及 LIMIT 截断后的排序稳定性。"
+    }
+   ]
+  },
+  {
+   "id": "C6",
+   "topic": "哪些能插入，排序是 ab、乙、甲还是别的顺序。",
+   "note": "Agent 先给出迁移场景与实际输出，学生随后写 A、B、C 三段；A 段标题是学生自写的“迁移前预测”，按本记录顺序不作为前置预测。",
+   "turns": [
+    {
+     "role": "agent",
+     "kind": "question",
+     "content": "哪些能插入，排序是 ab、乙、甲还是别的顺序。"
+    },
+    {
+     "role": "tool",
+     "kind": "result",
+     "content": "VARCHAR(3) 下“中文”“abc”“😀😀😀”插入成功，“abcd”返回 value_too_long。ORDER BY name 返回 ab、乙、甲。",
+     "executed_by": "agent",
+     "environment": "Linux/WSL 本机迁移实验"
+    },
+    {
+     "role": "student",
+     "kind": "transfer_prediction",
+     "content": "A 迁移前预测：VARCHAR(3) 按 Unicode 字符数计算，中文、abc、三个 emoji 应成功，abcd 应返回 value_too_long；ORDER BY name 按 Unicode 码点顺序应返回 ab、乙、甲。"
+    },
+    {
+     "role": "student",
+     "kind": "transfer_explanation",
+     "content": "B 迁移结果解释：中文、abc、😀😀😀 插入成功，abcd 返回 value_too_long；ORDER BY name 返回 ab、乙、甲，与预测一致。说明长度按字符数而非字节数计算，字符串比较按码点顺序，没有做语言相关排序。"
+    },
+    {
+     "role": "student",
+     "kind": "limitation",
+     "content": "C 局限：未覆盖组合字符、代理对边界、超长多字节字符串截断，以及不同排序规则下 emoji 与汉字的比较细节。"
+    }
+   ]
+  },
+  {
+   "id": "C7",
+   "topic": "无 ORDER BY 是否能依赖具体返回行，有 ORDER BY 时为什么必须确定排序边界。",
+   "note": "Agent 先给出迁移场景与实际输出，学生随后写 A、B、C 三段；A 段标题是学生自写的“迁移前预测”，按本记录顺序不作为前置预测。",
+   "turns": [
+    {
+     "role": "agent",
+     "kind": "question",
+     "content": "无 ORDER BY 是否能依赖具体返回行，有 ORDER BY 时为什么必须确定排序边界。"
+    },
+    {
+     "role": "tool",
+     "kind": "result",
+     "content": "无 ORDER BY 的 LIMIT 3 返回 [[10],[20],[30]]；ORDER BY id DESC LIMIT 2 返回 [[50],[40]]。",
+     "executed_by": "agent",
+     "environment": "Linux/WSL 本机迁移实验"
+    },
+    {
+     "role": "student",
+     "kind": "transfer_prediction",
+     "content": "A 迁移前预测：无 ORDER BY 的 LIMIT 3 即使提前停止，返回集合仍应是前三个主键 10、20、30；ORDER BY id DESC LIMIT 2 应返回 50、40，排序不受提前停止影响。"
+    },
+    {
+     "role": "student",
+     "kind": "transfer_explanation",
+     "content": "B 迁移结果解释：无 ORDER BY 的 LIMIT 3 返回 [[10],[20],[30]]；ORDER BY id DESC LIMIT 2 返回 [[50],[40]]。说明提前停止没有改变返回集合，带排序时先按 id 降序再截断，结果与预测一致。"
+    },
+    {
+     "role": "student",
+     "kind": "limitation",
+     "content": "C 局限：只覆盖小数据和固定缓存，未验证缓存预算变化、删除后空洞、大量行扫描及无 ORDER BY 时集合比较的稳定性。"
+    }
+   ]
+  },
+  {
+   "id": "C8",
+   "topic": "两个二进制是否应该一致，缺少 AVX2 或 FMA 时入口怎么回退，/data 应该出现哪些文件。",
+   "note": "Agent 先给出迁移场景与实际输出，学生随后写 A、B、C 三段；A 段标题是学生自写的“迁移前预测”，按本记录顺序不作为前置预测。",
+   "turns": [
+    {
+     "role": "agent",
+     "kind": "question",
+     "content": "两个二进制是否应该一致，缺少 AVX2 或 FMA 时入口怎么回退，/data 应该出现哪些文件。"
+    },
+    {
+     "role": "tool",
+     "kind": "result",
+     "content": "只读根文件系统加 /data 卷启动成功。AVX2 和 generic 对同一距离查询都输出 [[1,1]]。/data 只有 catalog.dat 和 rows_0.dat，没有 wal.log。AVX2、FMA、AVX2 二进制和 generic 二进制都存在。",
+     "executed_by": "agent",
+     "environment": "Linux/WSL 本机迁移实验"
+    },
+    {
+     "role": "student",
+     "kind": "transfer_prediction",
+     "content": "A 迁移前预测：只读根文件系统加 /data 卷应能启动并写入 /data；AVX2 和 generic 对同一距离查询应输出 [[1,1]]；/data 下应只有 catalog.dat 和 rows_0.dat。"
+    },
+    {
+     "role": "student",
+     "kind": "transfer_explanation",
+     "content": "B 迁移结果解释：只读根文件系统加 /data 卷启动成功；AVX2 和 generic 对同一距离查询都输出 [[1,1]]；/data 只有 catalog.dat 和 rows_0.dat，没有 wal.log；AVX2、FMA、AVX2 二进制和 generic 二进制都存在，说明运行不依赖根文件系统写入。"
+    },
+    {
+     "role": "student",
+     "kind": "limitation",
+     "content": "C 局限：本机仍具备 AVX2 和 FMA，未在真实缺少这些指令的机器上验证入口回退分支，也未覆盖 generic 与 AVX2 在更大查询集上的结果一致性。"
+    }
+   ]
+  },
+  {
+   "id": "E1",
+   "topic": "多表 checkpoint 是否分别保留每张表的 schema、行和索引，会不会只恢复最后一张表。",
+   "note": "Agent 先给出迁移场景与实际输出，学生随后写 A、B、C 三段；A 段标题是学生自写的“迁移前预测”，按本记录顺序不作为前置预测。",
+   "turns": [
+    {
+     "role": "agent",
+     "kind": "question",
+     "content": "多表 checkpoint 是否分别保留每张表的 schema、行和索引，会不会只恢复最后一张表。"
+    },
+    {
+     "role": "tool",
+     "kind": "result",
+     "content": "重启后 a 返回 [1,[0.0,0.0]]，b 返回 [2,[1.0,0.0]]；对 ia、ib 再次建索引都返回 index_exists。",
+     "executed_by": "agent",
+     "environment": "Linux/WSL 本机：两张表各一个向量索引，一次 checkpoint 后重启"
+    },
+    {
+     "role": "student",
+     "kind": "transfer_prediction",
+     "content": "A 迁移前预测：我预期两张表 a 和 b 都能恢复，各自的向量索引元数据也会保留，不会只恢复最后一张表。理由是 checkpoint 后 catalog 应记录每张表的活动数据文件和索引信息，重启按 catalog 逐表恢复。"
+    },
+    {
+     "role": "student",
+     "kind": "transfer_explanation",
+     "content": "B 迁移结果解释：实际重启后 a 返回 `[1,[0.0,0.0]]`，b 返回 `[2,[1.0,0.0]]`，两张表的行和向量都恢复；对 ia 再次建索引返回 `index_exists`，对 ib 也返回 `index_exists`，说明 checkpoint 后 catalog 保留了多表数据与索引元数据，恢复不是只恢复最后一张表。"
+    },
+    {
+     "role": "student",
+     "kind": "limitation",
+     "content": "C 局限：还没有覆盖多表同时触发 checkpoint、目录 fsync 失败、索引重建成本以及更多表下的恢复顺序，因此多表恢复的边界条件仍需验证。"
+    }
+   ]
+  },
+  {
+   "id": "E2",
+   "topic": "未知列错误是否只影响当前语句，事务是否还能继续提交。",
+   "note": "Agent 先给出迁移场景与实际输出，学生随后写 A、B、C 三段；A 段标题是学生自写的“迁移前预测”，按本记录顺序不作为前置预测。",
+   "turns": [
+    {
+     "role": "agent",
+     "kind": "question",
+     "content": "未知列错误是否只影响当前语句，事务是否还能继续提交。"
+    },
+    {
+     "role": "tool",
+     "kind": "result",
+     "content": "SELECT missing FROM t 返回 column_not_found；错误后事务内 SELECT id 返回 [[1],[2]]；COMMIT 后仍为 [[1],[2]]。",
+     "executed_by": "agent",
+     "environment": "Linux/WSL 本机：BEGIN 后插入 id=2，未知列错误后 COMMIT"
+    },
+    {
+     "role": "student",
+     "kind": "transfer_prediction",
+     "content": "A 迁移前预测：我预期 `SELECT missing FROM t` 返回 `column_not_found`；BEGIN 后已插入的 id=2 应保留，错误查询不会撤销事务内已有修改，COMMIT 后 id=1、id=2 仍应存在。理由是未知列属于当前语句错误，不应让整个事务失效。"
+    },
+    {
+     "role": "student",
+     "kind": "transfer_explanation",
+     "content": "B 迁移结果解释：实际 `SELECT missing FROM t` 返回 `column_not_found`；错误后事务内 `SELECT id FROM t ORDER BY id` 返回 `[[1],[2]]`，COMMIT 成功，COMMIT 后仍返回 `[[1],[2]]`。说明错误查询只影响当前语句，事务内已插入的 id=2 没有被撤销，事务仍可正常提交。"
+    },
+    {
+     "role": "student",
+     "kind": "limitation",
+     "content": "C 局限：还没有覆盖未知表、语法错误、类型错误、错误后执行 ROLLBACK，以及错误发生在 INSERT 或 DELETE 内部时事务状态是否同样保持。"
+    }
+   ]
+  },
+  {
+   "id": "P1",
+   "topic": "把数据超过内存预算拆成写入、查询、恢复三个实验，并解释实际结果和局限。",
+   "note": "Agent 先给出迁移场景与实际输出，学生随后写 A、B、C 三段；A 段标题是学生自写的“迁移前预测”，按本记录顺序不作为前置预测。",
+   "turns": [
+    {
+     "role": "agent",
+     "kind": "question",
+     "content": "把数据超过内存预算拆成写入、查询、恢复三个实验，并解释实际结果和局限。"
+    },
+    {
+     "role": "tool",
+     "kind": "result",
+     "content": "PLAN_TOPK {\"id\":62,\"rows\":[[100,57.90336777690582],[200,57.90336777690582],[300,57.90336777690582],[400,57.90336777690582],[500,57.90336777690582]]}\nPLAN_HWM VmHWM: 8768 kB\nPLAN_FILE_BYTES 16233223\nPLAN_RESTART_LAST {\"id\":1,\"rows\":[[30000]]}\nPLAN60_FILE_BYTES 32466343\nPLAN60_HWM VmHWM: 9392 kB\nPLAN60_RESTART_LAST [[60000]]",
+     "executed_by": "agent",
+     "environment": "Linux/WSL 本机：30,000 与 60,000 行、128 维、MVDB_CACHE_MB=4"
+    },
+    {
+     "role": "student",
+     "kind": "transfer_prediction",
+     "content": "A 迁移前预测：我预期数据从 30,000 行翻倍到 60,000 行后，文件会从约 16.2 MB 增到约 32.5 MB，但 4 MiB 缓存不变；TopK 返回的 id 和距离应基本不变，峰值 RSS 只会小幅增长而不是翻倍，因为查询按需读取数据、不把整表常驻内存；重启后最大 id 应为 60,000，因为写入已持久化。"
+    },
+    {
+     "role": "student",
+     "kind": "transfer_explanation",
+     "content": "B 迁移结果解释：实际文件为 32,466,343 字节，约 32.5 MB，缓存预算仍是 4 MiB；TopK 仍返回 id 100、200、300、400、500，距离约 57.90336777690582，与 30,000 行时相同。进程峰值 RSS 约 9,068 kB，相比 30,000 行时的约 8,768 kB 只增加约 300 kB，没有随文件翻倍。重启后最大 id 返回 60,000，说明数据文件已持久化并能恢复。这支持“流式扫描、不整表常驻”的结论。"
+    },
+    {
+     "role": "student",
+     "kind": "limitation",
+     "content": "C 局限：这次迁移仍未覆盖 10 倍数据量、并发查询、缓存淘汰策略、恢复耗时以及删除后的文件空洞，因此还不能说明所有超过内存预算的场景都同样稳定。"
+    }
+   ]
+  },
+  {
+   "id": "S1",
+   "topic": "本机小规模写入与查询自测",
+   "turns": [
+    {
+     "role": "tool",
+     "kind": "result",
+     "content": "startup 0.008 write 0.734 query1000 0.397 (unfiltered 0.273 filtered 0.124) VmHWM:\t   17792 kB\nshutdown 0.004",
+     "executed_by": "agent",
+     "environment": "Linux/WSL2 AVX2+FMA，10,000 行 × 128 维，1000 次 TopK，K=10"
+    }
+   ]
+  }
+ ],
+ "retrospective": {
+  "author": "student",
+  "confirmed_by_student": true,
+  "drafted_with_assistant_help": true,
+  "content": "一、任务理解\n我这次做的是MiniVectorDB加赛。我先按题干确认了几条硬约束：单机、单进程、单客户端，同一时刻最多一个显式事务；数据只能写到/data；提交成功后即使进程被SIGKILL，已确认的数据也不能丢；查询要支持普通SQL、L2距离TopK和带过滤的TopK；向量按float32存储。我的目标是先让公开用例和崩溃恢复稳定通过，再考虑性能，不先追求近似索引的复杂度。\n\n二、我的工作方式\n我让Agent从零实现C++17版本，不使用SQLite、RocksDB、Faiss这类现成引擎，避免把题目变成调库。我负责给出仓库和目录约束、确认验收标准、决定开发节奏；Agent负责具体设计、编码和跑测试。开发中我们把验收重点放在三件事上：公开用例是否全部通过，SIGKILL后已提交数据是否还在，Docker只读根文件系统下是否只写/data。\n\n三、遇到的问题\n中途我运行向量缓存更新和回滚测试时，命令长时间没有输出，看起来像卡死。我没有让它继续空转，而是要求先停下来定位原因，确认到底是数据库死锁、测试脚本问题还是shell包装问题。\n\n四、定位与修正\nAgent检查后发现两个外部原因：PowerShell会把双引号里的$?展开成True，pkill命令用-f匹配脚本名时又会匹配到包装脚本的bash进程。改用单引号包裹并加timeout重跑后，测试在10秒内结束，返回码为0。更新向量后TopK返回了新的距离，删除后对应记录消失，事务内更新后距离变化，回滚后又恢复旧距离。我据此确认数据库没有卡死，问题在测试命令的包装方式。\n\n五、验证结果\n公开用例20个全部通过。崩溃测试里，提交块写到一半时强制终止，重启后只保留此前已提交的1行，没有出现半批数据；完整提交后强制终止，重启后数据仍在；启动恢复过程中连续强制终止，再次启动仍能恢复。Docker多阶段构建成功，只读根文件系统加/data卷可以正常启动、建表并写入catalog.dat和rows_0.dat。本地自测在10000行、128维、1000次TopK查询下耗时约0.39秒，峰值内存约18MB，但这只是开发机自测，不是正式性能评测。\n\n六、取舍与反思\n这次实现优先保证正确性和可恢复性。向量检索先用精确扫描，ann模式也返回精确结果，牺牲了大规模数据下的查询上限，换来Recall@10稳定；存储上每个提交写一个事务块并同步落盘，恢复时按CRC截断撕裂块，代价是每批写入多一次同步。性能方面我决定先不做正式评测，先把功能、Docker和提测材料收口，因为当前阶段更重要的是避免为了追指标引入不稳定的近似索引。\n\n七、不足与下一步\n我的不足是前期对测试脚本的包装方式检查不够，看到空日志就先怀疑数据库卡死；另外我还没有自己独立设计对照实验去比较精确扫描、过滤顺序和缓存策略的代价。下一步如果继续，我会自己写三组小实验：同样数据下对比有无向量缓存，对比先过滤后算距离和先算距离后过滤，对比不同checkpoint阈值下的恢复时间，并把结果补进复盘。"
+ },
+ "limitations": [
+  "这是学习记录，不是评测结果：耗时、内存与文件大小都是开发机自测。",
+  "学生没有独立编写数据库实现，代码、实验脚本与 Docker 验证由 Agent 完成；学生的贡献是预测、结果解释、修正方案、复测预测、迁移与局限分析。",
+  "Q16–Q50 没有实验前预测，只能证明学生解释结果，不能证明事前预测。",
+  "迁移线程的实际输出先由 Agent 给出，学生的解释与局限在结果已知后撰写。",
+  "崩溃实验只模拟进程被强制终止，没有模拟掉电和磁盘损坏；ann 模式当前仍走精确扫描。"
+ ]
+}

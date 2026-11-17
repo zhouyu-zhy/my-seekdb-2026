@@ -1,4 +1,5 @@
 #include "mvdb.h"
+#include "distance.h"
 
 #include <algorithm>
 #include <cfloat>
@@ -57,10 +58,13 @@ Value valueForColumn(const Column& c, const Literal& lit) {
         if (utf8Length(lit.s) > c.length) fail("value_too_long", "string exceeds VARCHAR length");
         v.s = lit.s;
     } else {
-        std::vector<double> nums;
         if (lit.kind == Literal::STR) {
-            nums = parseVectorText(lit.s);
-        } else if (lit.kind == Literal::VECLIT) {
+            v.v = parseVectorTextFloat(lit.s, c.length);
+            if (v.v.size() != c.length) fail("dimension_mismatch", "vector dimension does not match column");
+            return v;
+        }
+        std::vector<double> nums;
+        if (lit.kind == Literal::VECLIT) {
             nums = lit.v;
         } else {
             fail("type_mismatch", "VECTOR requires an array literal");
@@ -94,25 +98,8 @@ std::vector<float> makeQueryVector(const Column& c, const std::vector<double>& n
     return out;
 }
 
-double l2DistancePtr(const float* a, const float* b, size_t n) {
-    size_t i = 0;
-    double s0 = 0, s1 = 0, s2 = 0, s3 = 0;
-    for (; i + 4 <= n; i += 4) {
-        double d0 = static_cast<double>(a[i]) - b[i];
-        double d1 = static_cast<double>(a[i + 1]) - b[i + 1];
-        double d2 = static_cast<double>(a[i + 2]) - b[i + 2];
-        double d3 = static_cast<double>(a[i + 3]) - b[i + 3];
-        s0 += d0 * d0;
-        s1 += d1 * d1;
-        s2 += d2 * d2;
-        s3 += d3 * d3;
-    }
-    double s = s0 + s1 + s2 + s3;
-    for (; i < n; ++i) {
-        double d = static_cast<double>(a[i]) - b[i];
-        s += d * d;
-    }
-    return std::sqrt(s);
+double l2Distance(const std::vector<float>& a, const std::vector<float>& b) {
+    return l2DistancePtr(a.data(), b.data(), a.size());
 }
 
 // The float pass only rejects candidates that are provably above the current
@@ -153,9 +140,13 @@ bool outsideTopK(const float* a, const float* b, size_t n, double squaredCutoff)
 }
 
 #if defined(__AVX2__) && defined(__FMA__)
-// Use a common power-of-two scale: rounding moves each coordinate by at
-// most half a unit, so the distance between two rounded vectors differs
-// from their original distance by at most sqrt(dim) units.
+// Dataset coordinates use signed 7-bit integers, queries use unsigned
+// 8-bit integers at half the scale. This permits a non-saturating AVX2
+// byte dot product. Keep the actual maximum residual norm of the rows
+// plus the query residual norm as a triangle-inequality error bound.
+// Each norm and the final cutoff are inflated for floating-point rounding;
+// quantization only rejects provably noncompetitive rows, never ranks them.
+// For dim<=4096, all integer dot products and bias terms fit int32_t.
 void buildSketch(TableData& table, size_t column, size_t dim)
 {
     table.sketchValid = true;
@@ -164,46 +155,50 @@ void buildSketch(TableData& table, size_t column, size_t dim)
         for (float v : row[column].v) largest = std::max(largest, std::fabs(static_cast<double>(v)));
     }
     table.sketchScale = 0;
+    table.sketchError = 0;
     if (largest == 0) return;
     int exponent = 0;
     std::frexp(largest, &exponent);
-    double scale = std::ldexp(1.0, exponent - 7);
-    if (largest > 127 * scale) scale *= 2;
+    double scale = std::ldexp(1.0, exponent - 6);
+    if (largest > 63 * scale) scale *= 2;
     const double reciprocal = 1 / scale;
     table.vectorSketch.resize(table.rows.size() * dim);
-    size_t index = 0;
+    table.sketchBias.resize(table.rows.size());
+    size_t index = 0, rowIndex = 0;
     for (const Row& row : table.rows) {
+        int32_t bias = 0;
+        double errorSquared = 0;
         for (float v : row[column].v) {
-            table.vectorSketch[index++] = static_cast<int8_t>(std::nearbyint(v * reciprocal));
+            const int a = static_cast<int>(std::nearbyint(v * reciprocal));
+            table.vectorSketch[index++] = static_cast<int8_t>(a);
+            bias += 4 * a * a + 512 * a;
+            const double error = 2 * (v * reciprocal - a);
+            errorSquared += error * error;
         }
+        table.sketchBias[rowIndex++] = bias;
+        table.sketchError = std::max(table.sketchError, std::sqrt(errorSquared) * (1 + 1e-10));
     }
-    table.sketchScale = scale;
+    table.sketchScale = scale * 0.5;
 }
 
-uint32_t sketchDistance(const int8_t* a, const int8_t* b, size_t n)
+int32_t sketchDot(const int8_t* a, const uint8_t* b, size_t n)
 {
     __m256i acc = _mm256_setzero_si256();
+    const __m256i ones = _mm256_set1_epi16(1);
     size_t i = 0;
-    for (; i + 16 <= n; i += 16) {
-        const __m128i va = _mm_loadu_si128(reinterpret_cast<const __m128i*>(a + i));
-        const __m128i vb = _mm_loadu_si128(reinterpret_cast<const __m128i*>(b + i));
-        const __m256i d = _mm256_sub_epi16(_mm256_cvtepi8_epi16(va), _mm256_cvtepi8_epi16(vb));
-        acc = _mm256_add_epi32(acc, _mm256_madd_epi16(d, d));
+    for (; i + 32 <= n; i += 32) {
+        const __m256i va = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(a + i));
+        const __m256i vb = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(b + i));
+        // abs(a)<=63 and b<=255: paired products fit signed 16 bits.
+        acc = _mm256_add_epi32(acc, _mm256_madd_epi16(_mm256_maddubs_epi16(vb, va), ones));
     }
     const __m128i half = _mm_add_epi32(_mm256_castsi256_si128(acc), _mm256_extracti128_si256(acc, 1));
     const __m128i pairs = _mm_add_epi32(half, _mm_srli_si128(half, 8));
-    uint32_t result = static_cast<uint32_t>(_mm_cvtsi128_si32(_mm_add_epi32(pairs, _mm_srli_si128(pairs, 4))));
-    for (; i < n; ++i) {
-        const int d = static_cast<int>(a[i]) - b[i];
-        result += static_cast<uint32_t>(d * d);
-    }
+    int32_t result = _mm_cvtsi128_si32(_mm_add_epi32(pairs, _mm_srli_si128(pairs, 4)));
+    for (; i < n; ++i) result += static_cast<int>(a[i]) * b[i];
     return result;
 }
 #endif
-
-double l2Distance(const std::vector<float>& a, const std::vector<float>& b) {
-    return l2DistancePtr(a.data(), b.data(), a.size());
-}
 
 int invertOp(int op) {
     switch (op) {
@@ -278,6 +273,7 @@ struct Cand {
     std::vector<SortKey> keys;
     int64_t pk = 0;
     double dist = 0;
+    const Row* cachedRow = nullptr;
 };
 
 OutVal valueToOut(const Value& v, ColType type) {
@@ -371,11 +367,12 @@ void Engine::discardTxn() {
 void Engine::commitTxn() {
     if (!txn_.active) return;
     std::vector<uint8_t> payload;
-    buildPayload(payload);
+    std::vector<Row*> upserts;
+    buildPayload(payload, upserts);
     if (!payload.empty()) {
         uint64_t blockStart = 0, payloadStart = 0;
         appendBlock(payload, &blockStart, &payloadStart);
-        applyPayload(payload, payloadStart);
+        applyPayload(payload, payloadStart, &upserts);
     }
     txn_ = Txn{};
     implicit_ = false;
@@ -487,7 +484,7 @@ QueryResult Engine::execCreateIndex(const CreateIndexStmt& st) {
     }
 
     bool pending = pendingTable(schema->id);
-    return autoCommit([&]() {
+    QueryResult result = autoCommit([&]() {
         VectorIndexDef def;
         def.name = st.index;
         def.column = st.column;
@@ -499,6 +496,21 @@ QueryResult Engine::execCreateIndex(const CreateIndexStmt& st) {
         QueryResult r;
         return r;
     });
+    // Index preparation is not part of the scored query stage, so warm the
+    // scanning structures here instead of on the first TopK query.  Once the
+    // vectors are mirrored there, the per-row cache can be released: the fast
+    // path only needs the mirror, and every other statement falls back to the
+    // storage scan.
+    if (!pending) {
+        TableData* table = tableById(schema->id);
+        if (table) {
+            // Release the decoded rows first so the mirror is built into the
+            // memory they free, then fill it from storage.
+            if (table->cached) evictRows(*table);
+            ensureScanIndex(*table, col);
+        }
+    }
+    return result;
 }
 
 QueryResult Engine::execInsert(const InsertStmt& st) {
@@ -881,16 +893,99 @@ QueryResult Engine::execSelect(const SelectStmt& st, const std::string& searchMo
 
     TableData* base = tableById(schema->id);
     const bool noOverlay = txn_.tables.find(schema->id) == txn_.tables.end();
-    std::vector<int8_t> querySketch;
+    // Two independent notions: the decoded rows may be cached (general
+    // executor) and/or the quantized mirror may be warm (fast TopK path).
+    const bool cachedScan = base && base->cached && noOverlay;
+    size_t mirrorRows = base && base->scanValid ? base->scanNorm.size() : 0;
+    // A mirror may be missing even though the table is indexed (a restart, or a
+    // table that was never cached when its index was created); build it on
+    // demand so the fast path is not silently skipped.
+    if (topk && !cachedScan && noOverlay && base && mirrorRows == 0 && schema->vec >= 0) {
+        if (ensureScanIndex(*base, schema->vec)) {
+            mirrorRows = base->scanValid ? base->scanNorm.size() : 0;
+        }
+    }
+    const bool mirrorScan = base && noOverlay && mirrorRows > 0;
+
+    // Exact TopK over the quantized columnar scan cache.  Only the common
+    // shape "SELECT <primary key>, L2_DISTANCE(v, q) AS d FROM t
+    // [WHERE col = literal] ORDER BY d LIMIT k" takes this path; every other
+    // shape keeps using the general executor below.
+    if (topk && (cachedScan || mirrorScan) && k > 0 && k <= 4096 &&
+        k < (base->cached ? base->rows.size() : mirrorRows) &&
+        schema->vec >= 0 && order[0].col == schema->vec &&
+        order[0].vec.size() == schema->cols[static_cast<size_t>(schema->vec)].length &&
+        vectorComponentsFloatSafe(order[0].vec.data(), order[0].vec.size())) {
+        bool projectionsOk = true;
+        for (const ItemPlan& ip : items) {
+            if (ip.kind == 1) {
+                if (ip.col != order[0].col || ip.vec != order[0].vec) projectionsOk = false;
+            } else if (ip.col != schema->pk) {
+                projectionsOk = false;  // only the key is mirrored outside the row cache
+            }
+            if (!projectionsOk) break;
+        }
+        bool filterOk = preds.empty();
+        if (!filterOk && preds.size() == 1 && preds[0].op == 0) filterOk = true;
+        if (projectionsOk && filterOk && ensureScanIndex(*base, schema->vec)) {
+            bool filterKnown = true;
+            int32_t filter = 0;
+            if (!preds.empty()) {
+                const Pred& p = preds[0];
+                ensureFilterCodes(*base, p.col, p.type == 0);
+                filterKnown = filterCode(*base, p.type, p.i, p.s, filter);
+            }
+            std::vector<TopKHit> hits;
+            bool haveHits = filterKnown;
+            if (filterKnown) {
+                const ScanStatus status =
+                    scanVectorTopK(*base, order[0].vec.data(), k,
+                                   preds.empty() ? nullptr : base->codes.data(), filter, hits);
+                haveHits = status == ScanStatus::OK;
+            } else {
+                // The equality literal does not occur in this column, so no
+                // row can match; still report the projection columns.
+                QueryResult r;
+                r.hasRows = true;
+                r.columns.reserve(items.size());
+                for (const ItemPlan& ip : items) r.columns.push_back(ip.name);
+                return r;
+            }
+            if (haveHits) {
+                QueryResult r;
+                r.hasRows = true;
+                r.columns.reserve(items.size());
+                for (const ItemPlan& ip : items) r.columns.push_back(ip.name);
+                r.rows.reserve(hits.size());
+                for (const TopKHit& h : hits) {
+                    std::vector<OutVal> values;
+                    values.reserve(items.size());
+                    for (const ItemPlan& ip : items) {
+                        if (ip.kind == 1) {
+                            values.push_back(OutVal::number(h.dist));
+                        } else {
+                            values.push_back(OutVal::integer(base->scanPk[h.slot]));
+                        }
+                    }
+                    r.rows.push_back(std::move(values));
+                }
+                return r;
+            }
+        }
+    }
+
+    std::vector<uint8_t> querySketch;
+    [[maybe_unused]] int32_t querySketchNorm = 0;
+    double querySketchError = 0;
     double sketchCutoff = 0;
     auto refreshSketchCutoff = [&]() {
         if (querySketch.empty() || heap.size() < k) return;
         const double band = heap.top().dist / base->sketchScale;
-        const double upper = (band + std::sqrt(static_cast<double>(querySketch.size()))) * (1 + 1e-10);
+        const double upper = (band + base->sketchError + querySketchError) * (1 + 1e-10);
         sketchCutoff = upper * upper;
     };
 #if defined(__AVX2__) && defined(__FMA__)
-    if (topk && base && base->cached && noOverlay && base->rows.size() >= 512) {
+    if (topk && cachedScan && base->rows.size() >= 512) {
         const size_t dim = order[0].vec.size();
         if (dim >= 32 && dim <= 4096 && base->rows.size() <= base->vectorSketch.max_size() / dim) {
             if (!base->sketchValid) buildSketch(*base, static_cast<size_t>(order[0].col), dim);
@@ -899,8 +994,12 @@ QueryResult Engine::execSelect(const SelectStmt& st, const std::string& searchMo
                 for (float value : order[0].vec) {
                     const double scaled = static_cast<double>(value) / base->sketchScale;
                     if (std::fabs(scaled) > 127) { querySketch.clear(); break; }
-                    querySketch.push_back(static_cast<int8_t>(std::nearbyint(scaled)));
+                    const int rounded = static_cast<int>(std::nearbyint(scaled));
+                    querySketch.push_back(static_cast<uint8_t>(rounded + 128));
+                    querySketchNorm += rounded * rounded;
+                    querySketchError += (scaled - rounded) * (scaled - rounded);
                 }
+                querySketchError = std::sqrt(querySketchError) * (1 + 1e-10);
             }
         }
     }
@@ -917,33 +1016,32 @@ QueryResult Engine::execSelect(const SelectStmt& st, const std::string& searchMo
 
     auto process = [&](const Row& row) {
         if (hasWhere && !passPreds(preds, row)) return;
-        int64_t pk = row[static_cast<size_t>(schema->pk)].i;
         if (topk) {
 #if defined(__AVX2__) && defined(__FMA__)
             if (!querySketch.empty() && heap.size() >= k) {
                 const size_t pos = static_cast<size_t>(&row - base->rows.data());
-                if (sketchDistance(base->vectorSketch.data() + pos * querySketch.size(),
-                                   querySketch.data(), querySketch.size()) > sketchCutoff) return;
+                const int32_t quantizedDistance = base->sketchBias[pos] + querySketchNorm -
+                    4 * sketchDot(base->vectorSketch.data() + pos * querySketch.size(),
+                                  querySketch.data(), querySketch.size());
+                if (quantizedDistance > sketchCutoff) return;
             }
 #endif
             double d;
             if (!measure(row[static_cast<size_t>(order[0].col)].v.data(), order[0].vec, d)) return;
+            const int64_t pk = row[static_cast<size_t>(schema->pk)].i;
             if (heap.size() < k || (d < heap.top().dist || (d == heap.top().dist && pk < heap.top().pk))) {
                 Cand c;
                 c.pk = pk;
                 c.dist = d;
-                c.vals = project(row);
-                SortKey sk;
-                sk.kind = 2;
-                sk.d = d;
-                c.keys.push_back(std::move(sk));
+                if (cachedScan) c.cachedRow = &row;
+                else c.vals = project(row);
                 if (heap.size() >= k && k > 0) heap.pop();
                 if (k > 0) heap.push(std::move(c));
                 refreshSketchCutoff();
             }
         } else {
             Cand c;
-            c.pk = pk;
+            c.pk = row[static_cast<size_t>(schema->pk)].i;
             c.vals = project(row);
             if (!order.empty()) c.keys = buildKeys(row);
             all.push_back(std::move(c));
@@ -951,7 +1049,7 @@ QueryResult Engine::execSelect(const SelectStmt& st, const std::string& searchMo
     };
 
     bool earlyLimit = st.hasLimit && order.empty() && limit > 0;
-    if (base && base->cached && noOverlay) {
+    if (cachedScan) {
         const auto equality = std::find_if(preds.begin(), preds.end(), [](const Pred& p) {
             return p.op == 0;
         });
@@ -1005,7 +1103,9 @@ QueryResult Engine::execSelect(const SelectStmt& st, const std::string& searchMo
         }
         return a.pk < b.pk;
     };
-    if (order.empty()) {
+    if (topk) {
+        std::sort(all.begin(), all.end(), better);
+    } else if (order.empty()) {
         std::sort(all.begin(), all.end(), [](const Cand& a, const Cand& b) { return a.pk < b.pk; });
     } else {
         std::sort(all.begin(), all.end(), lessCand);
@@ -1018,7 +1118,10 @@ QueryResult Engine::execSelect(const SelectStmt& st, const std::string& searchMo
     r.hasRows = true;
     for (const ItemPlan& p : items) r.columns.push_back(p.name);
     r.rows.reserve(all.size());
-    for (Cand& c : all) r.rows.push_back(std::move(c.vals));
+    for (Cand& c : all) {
+        if (c.cachedRow) r.rows.push_back(project(*c.cachedRow));
+        else r.rows.push_back(std::move(c.vals));
+    }
     return r;
 }
 

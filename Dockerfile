@@ -1,4 +1,7 @@
-# MiniVectorDB - build from source, then run a small static-ish runtime image.
+# MiniVectorDB - build the kernel variants from source, then run the widest one
+# the host CPU supports (selected by docker-entrypoint.sh).  The AVX-512 target
+# is optional, so a toolchain without those flags still produces a working
+# image; the wildcard copy tolerates its absence.
 FROM ubuntu:24.04 AS build
 
 ENV DEBIAN_FRONTEND=noninteractive
@@ -18,10 +21,9 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/* \
     && mkdir -p /app /data
 
-COPY --from=build /src/minivectordb /app/minivectordb
-COPY --from=build /src/minivectordb-avx2 /app/minivectordb-avx2
+COPY --from=build /src/minivectordb* /app/
 COPY --from=build /src/docker-entrypoint.sh /app/docker-entrypoint.sh
-RUN chmod 0755 /app/docker-entrypoint.sh /app/minivectordb /app/minivectordb-avx2
+RUN chmod 0755 /app/docker-entrypoint.sh && chmod 0755 /app/minivectordb*
 
 WORKDIR /app
 VOLUME ["/data"]

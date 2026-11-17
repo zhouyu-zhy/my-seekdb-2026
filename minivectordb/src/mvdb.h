@@ -249,7 +249,11 @@ struct TableData {
     std::vector<uint8_t> scanQ;     // rows * scanDim, code + 63
     std::vector<int32_t> scanNorm;  // sum of squared codes
     std::vector<int64_t> scanPk;    // primary key per slot
-    std::vector<float> scanVecs;    // contiguous float32 copy for rescoring
+    // Frame offset of each slot in the active data file.  The float32 values
+    // are read back from the read-only mapping instead of a second copy.
+    std::vector<uint32_t> scanOff;
+    const uint8_t* mapBase = nullptr;  // mmap of the active file, borrowed
+    size_t mapSize = 0;
     // Equality codes for one filter column, parallel to the row slots.
     int codeCol = -1;
     bool codeIsInt = true;
@@ -310,6 +314,8 @@ private:
     void openActiveFile();
     void reopenReadFile();
     void closeFiles();
+    void mapActive();
+    void unmapActive();
     FILE* openRead();
     void appendBlock(const std::vector<uint8_t>& payload, uint64_t* blockStart,
                      uint64_t* payloadStart);
@@ -354,7 +360,7 @@ private:
     bool filterCode(const TableData& t, int type, int64_t i, const std::string& s,
                     int32_t& code) const;
     int32_t codeForValue(TableData& t, const Value& v);
-    void touchScanRow(TableData& t, size_t slot, const Row& row);
+    void touchScanRow(TableData& t, size_t slot, const Row& row, uint32_t frameOff);
     void moveScanRow(TableData& t, size_t from, size_t to);
     void popScanRow(TableData& t);
     void resetScanIndex(TableData& t);
@@ -377,6 +383,8 @@ private:
     uint64_t epoch_ = 0;
     FILE* wal_ = nullptr;
     FILE* readFp_ = nullptr;
+    const uint8_t* map_ = nullptr;   // read-only mapping of the active data file
+    size_t mapSize_ = 0;
     uint64_t walSize_ = 0;
     uint64_t nextTxnId_ = 1;
     uint64_t nextTableId_ = 1;
@@ -393,6 +401,9 @@ uint32_t crc32(const uint8_t* data, size_t len);
 uint64_t rowBodySize(const TableSchema& schema, const Row& row);
 void encodeRowBody(const TableSchema& schema, const Row& row, std::vector<uint8_t>& out);
 Row decodeRowBody(const TableSchema& schema, const uint8_t*& p, const uint8_t* end);
+// Locate the float32 payload of the vector column inside an in-memory frame.
+// Returns nullptr when the frame does not hold exactly that column width.
+const float* rowVectorInFrame(const TableSchema& schema, const uint8_t* frame, size_t frameSize);
 void encodeSchema(const TableSchema& schema, std::vector<uint8_t>& out);
 TableSchema decodeSchema(const uint8_t*& p, const uint8_t* end);
 std::string joinPath(const std::string& dir, const std::string& name);

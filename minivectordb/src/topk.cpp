@@ -193,7 +193,7 @@ ScanStatus scanVectorTopK(const TableData& table, const float* query, size_t k,
     const size_t rows = table.scanNorm.size();
     if (!table.scanValid || !table.scanSafe || k == 0 || k >= rows) return ScanStatus::UNAVAILABLE;
     const size_t dim = table.scanDim;
-    if (dim == 0 || table.scanQ.size() != rows * dim || table.scanVecs.size() != rows * dim) {
+    if (dim == 0 || table.scanQ.size() != rows * dim || table.scanOff.size() != rows) {
         return ScanStatus::UNAVAILABLE;
     }
     const float scale = table.scanScale;
@@ -224,6 +224,8 @@ ScanStatus scanVectorTopK(const TableData& table, const float* query, size_t k,
 
     const size_t keep = std::min(rows, std::max<size_t>(128, 4 * k + 32));
     const size_t cap = std::min(rows, 2 * keep);
+
+    if (table.mapBase == nullptr || table.mapSize == 0) return ScanStatus::UNAVAILABLE;
 
     const uint8_t* qrows = reinterpret_cast<const uint8_t*>(table.scanQ.data());
     const int32_t* norms = table.scanNorm.data();
@@ -303,10 +305,17 @@ ScanStatus scanVectorTopK(const TableData& table, const float* query, size_t k,
     std::vector<FloatHit> floats;
     floats.reserve(cand.size());
     const size_t exactCount = std::min(cand.size(), k + 16);
-    const float* fvecs = table.scanVecs.data();
+    // The float32 values live in the read-only mapping of the data file, so the
+    // rescore does not need a second copy of the vector column in memory.
+    auto vecOf = [&](uint32_t slot) -> const float* {
+        const uint32_t off = table.scanOff[slot];
+        if (off >= table.mapSize) return nullptr;
+        return rowVectorInFrame(table.schema, table.mapBase + off, table.mapSize - off);
+    };
     for (const Cand& c : cand) {
-        floats.push_back(FloatHit{l2sq(fvecs + static_cast<size_t>(c.slot) * dim, query, dim),
-                                  pks[c.slot], c.slot});
+        const float* v = vecOf(c.slot);
+        if (v == nullptr) return ScanStatus::UNAVAILABLE;
+        floats.push_back(FloatHit{l2sq(v, query, dim), pks[c.slot], c.slot});
     }
     if (floats.size() > exactCount) {
         std::nth_element(floats.begin(), floats.begin() + static_cast<ptrdiff_t>(exactCount), floats.end(),
@@ -316,8 +325,9 @@ ScanStatus scanVectorTopK(const TableData& table, const float* query, size_t k,
     std::vector<ExactHit> exact;
     exact.reserve(floats.size());
     for (const FloatHit& f : floats) {
-        exact.push_back(ExactHit{
-            l2DistancePtr(fvecs + static_cast<size_t>(f.slot) * dim, query, dim), f.pk, f.slot});
+        const float* v = vecOf(static_cast<uint32_t>(f.slot));
+        if (v == nullptr) return ScanStatus::UNAVAILABLE;
+        exact.push_back(ExactHit{l2DistancePtr(v, query, dim), f.pk, f.slot});
     }
     std::sort(exact.begin(), exact.end(), exactLess);
     if (exact.size() > k) {
@@ -364,8 +374,10 @@ void Engine::resetScanIndex(TableData& t) {
     t.scanScale = 1.0f;
     t.scanQ.clear();
     t.scanQ.shrink_to_fit();
-    t.scanVecs.clear();
-    t.scanVecs.shrink_to_fit();
+    t.scanOff.clear();
+    t.scanOff.shrink_to_fit();
+    t.mapBase = nullptr;
+    t.mapSize = 0;
     t.scanNorm.clear();
     t.scanNorm.shrink_to_fit();
     t.scanPk.clear();
@@ -384,62 +396,76 @@ void Engine::resetScanIndex(TableData& t) {
 bool Engine::buildScanIndexFromStorage(TableData& t, int vecCol) {
     const size_t dim = t.schema.cols[static_cast<size_t>(vecCol)].length;
     const size_t n = t.refs.size();
-    if (n == 0 || dim == 0) return false;
+    t.mapBase = map_;
+    t.mapSize = mapSize_;
+    if (n == 0 || dim == 0 || t.mapBase == nullptr) return false;
+    std::vector<std::pair<int64_t, uint32_t>> order;
+    order.reserve(n);
+    for (const auto& kv : t.refs) order.emplace_back(kv.first, kv.second.off);
+    std::sort(order.begin(), order.end());
+
     t.scanVec = vecCol;
     t.scanDim = static_cast<uint32_t>(dim);
     t.scanNorm.assign(n, 0);
     t.scanQ.assign(n * dim, 63);
-    t.scanVecs.assign(n * dim, 0.0f);
     t.scanPk.resize(n);
+    t.scanOff.resize(n);
     t.codeCol = -1;
     t.codes.clear();
     t.intCodes.clear();
     t.strCodes.clear();
 
     float maxAbs = 0;
-    size_t seen = 0;
     bool safe = true;
-    scanRows(t.schema.id, [&](const Row& row) {
-        const std::vector<float>& v = row[static_cast<size_t>(vecCol)].v;
-        if (v.size() != dim || !vectorComponentsFloatSafe(v.data(), dim)) {
+    for (size_t i = 0; i < n && safe; ++i) {
+        const float* v = rowVectorInFrame(t.schema, t.mapBase + order[i].second,
+                                          t.mapSize - order[i].second);
+        if (v == nullptr || !vectorComponentsFloatSafe(v, dim)) {
             safe = false;
-            return true;
+            break;
         }
-        for (float x : v) maxAbs = std::max(maxAbs, std::fabs(x));
-        ++seen;
-        return true;
-    });
-    if (!safe || seen != n) {
-        t.scanSafe = false;
-        t.scanValid = true;
+        for (size_t j = 0; j < dim; ++j) maxAbs = std::max(maxAbs, std::fabs(v[j]));
+    }
+    if (!safe) {
+        t.scanValid = false;
         return false;
     }
     const float scale = maxAbs > 0 ? maxAbs / static_cast<float>(kCodeLimit) : 1.0f;
     t.scanScale = scale;
     const float inv = 1.0f / scale;
-    size_t slot = 0;
-    scanRows(t.schema.id, [&](const Row& row) {
-        const std::vector<float>& v = row[static_cast<size_t>(vecCol)].v;
-        float* arena = t.scanVecs.data() + slot * dim;
-        std::memcpy(arena, v.data(), dim * sizeof(float));
-        uint8_t* dst = t.scanQ.data() + slot * dim;
+    for (size_t i = 0; i < n; ++i) {
+        const float* v = rowVectorInFrame(t.schema, t.mapBase + order[i].second,
+                                          t.mapSize - order[i].second);
+        if (v == nullptr) {
+            t.scanValid = false;
+            return false;
+        }
+        uint8_t* dst = t.scanQ.data() + i * dim;
         int32_t norm = 0;
         for (size_t j = 0; j < dim; ++j) {
             const int c = quantize(v[j], inv);
             dst[j] = static_cast<uint8_t>(c + kCodeLimit);
             norm += c * c;
         }
-        t.scanNorm[slot] = norm;
-        t.scanPk[slot] = row[static_cast<size_t>(t.schema.pk)].i;
-        ++slot;
-        return true;
-    });
+        t.scanNorm[i] = norm;
+        t.scanPk[i] = order[i].first;
+        t.scanOff[i] = order[i].second;
+    }
     t.scanValid = true;
-    t.scanSafe = slot == n;
-    return t.scanSafe;
+    t.scanSafe = true;
+    return true;
 }
 
 bool Engine::ensureScanIndex(TableData& t, int vecCol) {
+    // The data file only grows, so the mapping is refreshed when it no longer
+    // covers the current file.  Re-mapping drops the old address range, which
+    // retires every other table's mirror.
+    if (map_ == nullptr || mapSize_ < static_cast<size_t>(walSize_)) {
+        for (auto& kv : tables_) {
+            if (kv.second.get() != &t && kv.second->scanValid) resetScanIndex(*kv.second);
+        }
+        mapActive();
+    }
     if (vecCol < 0 || static_cast<size_t>(vecCol) >= t.schema.cols.size()) return false;
     const Column& column = t.schema.cols[static_cast<size_t>(vecCol)];
     if (column.type != ColType::VECTOR || column.length == 0) return false;
@@ -450,7 +476,7 @@ bool Engine::ensureScanIndex(TableData& t, int vecCol) {
     const size_t expected = rows > 0 ? rows : t.refs.size();
     const bool sized = t.scanValid && t.scanVec == vecCol && t.scanDim == dim &&
                        t.scanNorm.size() == expected && t.scanQ.size() == expected * dim &&
-                       t.scanVecs.size() == expected * dim;
+                       t.scanOff.size() == expected;
     if (sized) return t.scanSafe;
     // The decoded rows were released after preparation: rebuild the mirror by
     // streaming the stored rows instead.
@@ -460,7 +486,9 @@ bool Engine::ensureScanIndex(TableData& t, int vecCol) {
     t.scanDim = static_cast<uint32_t>(dim);
     t.scanNorm.assign(rows, 0);
     t.scanQ.assign(rows * dim, 63);
-    t.scanVecs.assign(rows * dim, 0.0f);
+    t.mapBase = map_;
+    t.mapSize = mapSize_;
+    t.scanOff.assign(rows, 0);
     t.scanPk.resize(rows);
     t.codeCol = -1;
     t.codes.clear();
@@ -496,8 +524,8 @@ bool Engine::ensureScanIndex(TableData& t, int vecCol) {
         const float inv = 1.0f / scale;
         for (size_t i = 0; i < rows; ++i) {
             const std::vector<float>& v = t.rows[i][static_cast<size_t>(vecCol)].v;
-            float* arena = t.scanVecs.data() + i * dim;
-            std::memcpy(arena, v.data(), dim * sizeof(float));
+            auto ref = t.refs.find(t.scanPk[i]);
+            t.scanOff[i] = ref == t.refs.end() ? 0u : ref->second.off;
             uint8_t* dst = t.scanQ.data() + i * dim;
             int32_t norm = 0;
             for (size_t j = 0; j < dim; ++j) {
@@ -567,24 +595,22 @@ bool Engine::filterCode(const TableData& t, int type, int64_t i, const std::stri
     return true;
 }
 
-void Engine::touchScanRow(TableData& t, size_t slot, const Row& row) {
+void Engine::touchScanRow(TableData& t, size_t slot, const Row& row, uint32_t frameOff) {
     if (!t.scanValid || t.scanVec < 0) return;
     const size_t dim = t.scanDim;
     if (t.scanPk.size() <= slot) t.scanPk.resize(slot + 1);
     if (t.scanNorm.size() <= slot) t.scanNorm.resize(slot + 1, 0);
     if (t.scanQ.size() < (slot + 1) * dim) t.scanQ.resize((slot + 1) * dim, 63);
-    if (t.scanVecs.size() < (slot + 1) * dim) t.scanVecs.resize((slot + 1) * dim, 0.0f);
+    if (t.scanOff.size() <= slot) t.scanOff.resize(slot + 1, 0);
     const std::vector<float>& v = row[static_cast<size_t>(t.scanVec)].v;
     const float inv = t.scanScale > 0 ? 1.0f / t.scanScale : 1.0f;
     uint8_t* dst = t.scanQ.data() + slot * dim;
-    float* arena = t.scanVecs.data() + slot * dim;
     int32_t norm = 0;
+    t.scanOff[slot] = frameOff;
     if (v.size() != dim) {
         std::memset(dst, 63, dim);
-        std::memset(arena, 0, dim * sizeof(float));
         t.scanSafe = false;
     } else {
-        std::memcpy(arena, v.data(), dim * sizeof(float));
         for (size_t j = 0; j < dim; ++j) {
             const float scaled = v[j] * inv;
             // A value outside the scale the cache was built with would be
@@ -611,8 +637,8 @@ void Engine::moveScanRow(TableData& t, size_t from, size_t to) {
     if (from >= t.scanNorm.size() || to >= t.scanNorm.size()) return;
     t.scanPk[to] = t.scanPk[from];
     t.scanNorm[to] = t.scanNorm[from];
+    if (to < t.scanOff.size() && from < t.scanOff.size()) t.scanOff[to] = t.scanOff[from];
     std::memcpy(t.scanQ.data() + to * dim, t.scanQ.data() + from * dim, dim);
-    std::memcpy(t.scanVecs.data() + to * dim, t.scanVecs.data() + from * dim, dim * sizeof(float));
     if (t.codeCol >= 0 && from < t.codes.size() && to < t.codes.size()) t.codes[to] = t.codes[from];
 }
 
@@ -622,7 +648,7 @@ void Engine::popScanRow(TableData& t) {
     if (!t.scanPk.empty()) t.scanPk.pop_back();
     if (!t.scanNorm.empty()) t.scanNorm.pop_back();
     if (t.scanQ.size() >= dim) t.scanQ.resize(t.scanQ.size() - dim);
-    if (t.scanVecs.size() >= dim) t.scanVecs.resize(t.scanVecs.size() - dim);
+    if (!t.scanOff.empty()) t.scanOff.pop_back();
     if (t.codeCol >= 0 && !t.codes.empty()) t.codes.pop_back();
 }
 

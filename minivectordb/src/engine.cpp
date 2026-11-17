@@ -503,10 +503,10 @@ QueryResult Engine::execCreateIndex(const CreateIndexStmt& st) {
     // storage scan.
     if (!pending) {
         TableData* table = tableById(schema->id);
-        if (table && table->cached) {
+        if (table) {
             // Release the decoded rows first so the mirror is built into the
             // memory they free, then fill it from storage.
-            evictRows(*table);
+            if (table->cached) evictRows(*table);
             ensureScanIndex(*table, col);
         }
     }
@@ -896,7 +896,15 @@ QueryResult Engine::execSelect(const SelectStmt& st, const std::string& searchMo
     // Two independent notions: the decoded rows may be cached (general
     // executor) and/or the quantized mirror may be warm (fast TopK path).
     const bool cachedScan = base && base->cached && noOverlay;
-    const size_t mirrorRows = base && base->scanValid ? base->scanNorm.size() : 0;
+    size_t mirrorRows = base && base->scanValid ? base->scanNorm.size() : 0;
+    // A mirror may be missing even though the table is indexed (a restart, or a
+    // table that was never cached when its index was created); build it on
+    // demand so the fast path is not silently skipped.
+    if (topk && !cachedScan && noOverlay && base && mirrorRows == 0 && schema->vec >= 0) {
+        if (ensureScanIndex(*base, schema->vec)) {
+            mirrorRows = base->scanValid ? base->scanNorm.size() : 0;
+        }
+    }
     const bool mirrorScan = base && noOverlay && mirrorRows > 0;
 
     // Exact TopK over the quantized columnar scan cache.  Only the common

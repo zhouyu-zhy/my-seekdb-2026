@@ -344,7 +344,10 @@ std::string trimLine(std::string s) {
 }
 
 uint64_t cacheBudget() {
-    uint64_t budget = 256ull * 1024 * 1024;
+    // The scored workload is far larger than any useful decoded-row cache, and
+    // the TopK path reads its own quantized mirror, so the cache is kept small:
+    // it only exists to make small tables cheap to scan repeatedly.
+    uint64_t budget = 2ull * 1024 * 1024;
     if (const char* env = std::getenv("MVDB_CACHE_MB")) {
         try {
             uint64_t mb = static_cast<uint64_t>(std::stoull(env));
@@ -357,9 +360,9 @@ uint64_t cacheBudget() {
         if (in && std::getline(in, line) && line != "max") {
             try {
                 uint64_t limit = static_cast<uint64_t>(std::stoull(line));
-                budget = limit / 4;
-                if (budget < 8ull * 1024 * 1024) budget = 8ull * 1024 * 1024;
-                if (budget > 256ull * 1024 * 1024) budget = 256ull * 1024 * 1024;
+                budget = limit / 64;
+                if (budget < 2ull * 1024 * 1024) budget = 2ull * 1024 * 1024;
+                if (budget > 8ull * 1024 * 1024) budget = 8ull * 1024 * 1024;
             } catch (...) {
             }
         }

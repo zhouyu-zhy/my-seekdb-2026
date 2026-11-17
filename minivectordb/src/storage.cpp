@@ -16,6 +16,7 @@
 #include <windows.h>
 #else
 #include <fcntl.h>
+#include <sys/mman.h>
 #include <unistd.h>
 #endif
 
@@ -385,7 +386,32 @@ Engine::~Engine() { closeFiles(); }
 
 std::string joinPath(const std::string& dir, const std::string& name) { return dir + "/" + name; }
 
+void Engine::mapActive() {
+    unmapActive();
+#if defined(__linux__)
+    if (walSize_ == 0) return;
+    const int fd = ::open(joinPath(dir_, activeFile_).c_str(), O_RDONLY);
+    if (fd < 0) return;
+    void* p = ::mmap(nullptr, static_cast<size_t>(walSize_), PROT_READ, MAP_PRIVATE, fd, 0);
+    ::close(fd);
+    if (p == MAP_FAILED) return;
+    map_ = static_cast<const uint8_t*>(p);
+    mapSize_ = static_cast<size_t>(walSize_);
+#endif
+}
+
+void Engine::unmapActive() {
+#if defined(__linux__)
+    if (map_) {
+        ::munmap(const_cast<uint8_t*>(map_), mapSize_);
+    }
+#endif
+    map_ = nullptr;
+    mapSize_ = 0;
+}
+
 void Engine::closeFiles() {
+    unmapActive();
     if (wal_) {
         std::fclose(wal_);
         wal_ = nullptr;
@@ -462,6 +488,7 @@ void Engine::openActiveFile() {
     walSize_ = fileSize(wal_);
     seekFile(wal_, walSize_);
     reopenReadFile();
+    mapActive();
 }
 
 void Engine::reopenReadFile() {
@@ -786,7 +813,7 @@ void Engine::applyUpsertRow(uint32_t tableId, Row& row, uint64_t off, uint32_t b
         auto slot = t.slotOf.find(pk);
         if (slot != t.slotOf.end()) {
             const size_t index = static_cast<size_t>(slot->second);
-            touchScanRow(t, index, t.rows[index]);
+            touchScanRow(t, index, t.rows[index], static_cast<uint32_t>(off));
         }
     }
 
@@ -1028,6 +1055,41 @@ void Engine::checkpoint() {
     openActiveFile();
     walSize_ = newSize;
     seekFile(wal_, walSize_);
+}
+
+const float* rowVectorInFrame(const TableSchema& schema, const uint8_t* frame, size_t frameSize) {
+    if (frameSize < 5) return nullptr;
+    const uint8_t* end = frame + frameSize;
+    const uint8_t* p = frame + 5;  // skip op + length
+    if (end - p < 12) return nullptr;
+    p += 4;  // table id
+    p += 8;  // the body repeats the primary key before the columns
+    for (size_t i = 0; i < schema.cols.size(); ++i) {
+        const Column& col = schema.cols[i];
+        if (col.type == ColType::BIGINT) {
+            if (end - p < 8) return nullptr;
+            p += 8;
+        } else if (col.type == ColType::VARCHAR) {
+            if (end - p < 4) return nullptr;
+            uint32_t len = static_cast<uint32_t>(p[0]) | (static_cast<uint32_t>(p[1]) << 8) |
+                           (static_cast<uint32_t>(p[2]) << 16) | (static_cast<uint32_t>(p[3]) << 24);
+            p += 4;
+            if (static_cast<uint64_t>(end - p) < len) return nullptr;
+            p += len;
+        } else {
+            if (end - p < 4) return nullptr;
+            uint32_t dim = static_cast<uint32_t>(p[0]) | (static_cast<uint32_t>(p[1]) << 8) |
+                           (static_cast<uint32_t>(p[2]) << 16) | (static_cast<uint32_t>(p[3]) << 24);
+            p += 4;
+            if (static_cast<uint64_t>(end - p) < static_cast<uint64_t>(dim) * 4u) return nullptr;
+            if (static_cast<size_t>(i) == static_cast<size_t>(schema.vec) &&
+                dim == schema.cols[static_cast<size_t>(schema.vec)].length) {
+                return reinterpret_cast<const float*>(p);
+            }
+            p += static_cast<size_t>(dim) * 4u;
+        }
+    }
+    return nullptr;
 }
 
 bool Engine::lookupRow(uint32_t tableId, int64_t pk, Row& out) {

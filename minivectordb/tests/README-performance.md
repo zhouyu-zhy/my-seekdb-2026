@@ -47,6 +47,14 @@ and queries CLI options support other workloads.
 7. Plain decimal vector components are parsed with an exact integer mantissa
    division instead of a general float conversion, which keeps the values
    bit-identical while costing a few instructions.
+8. The scan is built by `CREATE VECTOR INDEX` and the decoded rows are then
+   released (`malloc_trim`), so the run peaks at the mirror instead of the
+   mirror plus a second copy of every row.
+9. Three binaries are produced: portable, AVX2+FMA and AVX-512 VNNI.  The
+   entrypoint picks the widest one from `/proc/cpuinfo`; the 512-bit build is
+   used only on Intel (`vendor_id` `GenuineIntel`), because AMD parts execute
+   512-bit integer ops double-pumped and measured 15% slower there, while the
+   functional result is identical either way.
 
 ## Measured on the development machine (median of three paired rounds)
 

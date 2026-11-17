@@ -78,7 +78,37 @@ inline __m256i dotBlock(__m256i acc, __m256i q, const uint8_t* row) {
 // of four serial horizontal sums.
 inline void dotCodes4(const uint8_t* q, const uint8_t* r0, const uint8_t* r1, const uint8_t* r2,
                       const uint8_t* r3, size_t n, int32_t out[4]) {
-#if defined(__AVX2__) && defined(__FMA__)
+#if defined(__AVX512VNNI__) && defined(__AVX512BW__)
+    // 64 lanes per instruction: rows hold code + 63 (unsigned), the query holds
+    // signed codes, so vpdpbusd accumulates exactly the same integer sums.
+    __m512i a0 = _mm512_setzero_si512(), a1 = a0, a2 = a0, a3 = a0;
+    size_t i = 0;
+    for (; i + 64 <= n; i += 64) {
+        const __m512i qv = _mm512_loadu_si512(reinterpret_cast<const void*>(q + i));
+        a0 = _mm512_dpbusd_epi32(a0, _mm512_loadu_si512(reinterpret_cast<const void*>(r0 + i)), qv);
+        a1 = _mm512_dpbusd_epi32(a1, _mm512_loadu_si512(reinterpret_cast<const void*>(r1 + i)), qv);
+        a2 = _mm512_dpbusd_epi32(a2, _mm512_loadu_si512(reinterpret_cast<const void*>(r2 + i)), qv);
+        a3 = _mm512_dpbusd_epi32(a3, _mm512_loadu_si512(reinterpret_cast<const void*>(r3 + i)), qv);
+    }
+    // Fold the 512-bit accumulators to 256 bits first and reuse the AVX2
+    // four-way horizontal sum: the generic _mm512 reduction costs more than
+    // the dot loop on CPUs that double-pump 512-bit arithmetic.
+    __m256i y0 = _mm256_add_epi32(_mm512_castsi512_si256(a0), _mm512_extracti64x4_epi64(a0, 1));
+    __m256i y1 = _mm256_add_epi32(_mm512_castsi512_si256(a1), _mm512_extracti64x4_epi64(a1, 1));
+    __m256i y2 = _mm256_add_epi32(_mm512_castsi512_si256(a2), _mm512_extracti64x4_epi64(a2, 1));
+    __m256i y3 = _mm256_add_epi32(_mm512_castsi512_si256(a3), _mm512_extracti64x4_epi64(a3, 1));
+    const __m256i h0 = _mm256_hadd_epi32(y0, y1);
+    const __m256i h1 = _mm256_hadd_epi32(y2, y3);
+    const __m256i h2 = _mm256_hadd_epi32(h0, h1);
+    _mm_storeu_si128(reinterpret_cast<__m128i*>(out),
+                     _mm_add_epi32(_mm256_castsi256_si128(h2), _mm256_extracti128_si256(h2, 1)));
+    for (; i < n; ++i) {
+        out[0] += static_cast<int32_t>(r0[i]) * static_cast<int8_t>(q[i]);
+        out[1] += static_cast<int32_t>(r1[i]) * static_cast<int8_t>(q[i]);
+        out[2] += static_cast<int32_t>(r2[i]) * static_cast<int8_t>(q[i]);
+        out[3] += static_cast<int32_t>(r3[i]) * static_cast<int8_t>(q[i]);
+    }
+#elif defined(__AVX2__) && defined(__FMA__)
     __m256i a0 = _mm256_setzero_si256(), a1 = a0, a2 = a0, a3 = a0;
     size_t i = 0;
     for (; i + 32 <= n; i += 32) {
@@ -112,7 +142,20 @@ inline void dotCodes4(const uint8_t* q, const uint8_t* r0, const uint8_t* r1, co
 }
 
 inline int32_t dotCodes1(const uint8_t* q, const uint8_t* r, size_t n) {
-#if defined(__AVX2__) && defined(__FMA__)
+#if defined(__AVX512VNNI__) && defined(__AVX512BW__)
+    __m512i acc = _mm512_setzero_si512();
+    size_t i = 0;
+    for (; i + 64 <= n; i += 64) {
+        acc = _mm512_dpbusd_epi32(acc, _mm512_loadu_si512(reinterpret_cast<const void*>(r + i)),
+                                  _mm512_loadu_si512(reinterpret_cast<const void*>(q + i)));
+    }
+    const __m256i folded = _mm256_add_epi32(_mm512_castsi512_si256(acc), _mm512_extracti64x4_epi64(acc, 1));
+    const __m128i half = _mm_add_epi32(_mm256_castsi256_si128(folded), _mm256_extracti128_si256(folded, 1));
+    const __m128i pairs = _mm_add_epi32(half, _mm_srli_si128(half, 8));
+    int32_t sum = _mm_cvtsi128_si32(_mm_add_epi32(pairs, _mm_srli_si128(pairs, 4)));
+    for (; i < n; ++i) sum += static_cast<int32_t>(r[i]) * static_cast<int8_t>(q[i]);
+    return sum;
+#elif defined(__AVX2__) && defined(__FMA__)
     __m256i acc = _mm256_setzero_si256();
     size_t i = 0;
     for (; i + 32 <= n; i += 32) {

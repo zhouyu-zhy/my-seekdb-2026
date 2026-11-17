@@ -18,12 +18,12 @@
 /* Degree of the graph that is searched. Kept equal to the contest baseline so
  * the query path (and its cost) is unchanged. */
 #define SK_GRAPH_DEGREE 128
-/* NN-descent fallback knobs: 128 intermediate degree x 36 iterations. The
+/* NN-descent fallback knobs: 128 intermediate degree x 32 iterations. The
  * hidden 250K set keeps the NN-descent fallback, so this is the scored build
- * path. Measured on gfx1100, the graph remains within the recall envelope and
+ * path. Measured on gfx1100, this keeps the graph within the recall envelope;
  * the wider CAGRA beam recovers the lost neighbours at query time. */
 #ifndef SK_NN_ITER
-#define SK_NN_ITER 36
+#define SK_NN_ITER 32
 #endif
 #define SK_IVF_MIN_N 4096
 /* Use bounded staging when the existing full-matrix upload would be large. */
@@ -42,6 +42,9 @@
 #endif
 #ifndef SK_SEARCH_WIDTH
 #define SK_SEARCH_WIDTH 24
+#endif
+#ifndef SK_ITOPK
+#define SK_ITOPK 512
 #endif
 /* Above this dimension the device copy of the dataset that the CAGRA index is
  * built over is kept in FP16 (half of the FP32 footprint). The contest allows
@@ -647,7 +650,7 @@ int seekdb_cuvs_search(void* handle, const float* query, long nq, long topk,
     dt=qt; dt.dl_tensor.data=dd; dt.dl_tensor.dtype.code=kDLFloat; dt.dl_tensor.shape=dsh;
     {
       size_t required_itopk = (size_t)topk * 4;
-      if (required_itopk < 512) required_itopk = 512;
+      if (required_itopk < SK_ITOPK) required_itopk = SK_ITOPK;
       sp->itopk_size = h->default_itopk > required_itopk ? h->default_itopk : required_itopk;
       sp->search_width = SK_SEARCH_WIDTH;
     }

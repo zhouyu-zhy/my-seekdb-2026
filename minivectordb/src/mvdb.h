@@ -348,6 +348,7 @@ private:
     TableData* tableById(uint32_t id);
     bool pendingTable(uint32_t id) const;
     bool lookupRow(uint32_t tableId, int64_t pk, Row& out);
+    bool pkExists(uint32_t tableId, int64_t pk);
     void scanRows(uint32_t tableId, const std::function<bool(const Row&)>& fn);
     void maybeCache(TableData& table);
     void dropCache(TableData& table);

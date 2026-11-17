@@ -545,8 +545,7 @@ QueryResult Engine::execInsert(const InsertStmt& st) {
         }
         int64_t pk = row[static_cast<size_t>(schema->pk)].i;
         if (!seen.insert(pk).second) fail("duplicate_key", "duplicate primary key");
-        Row existing;
-        if (lookupRow(schema->id, pk, existing)) fail("duplicate_key", "duplicate primary key");
+        if (pkExists(schema->id, pk)) fail("duplicate_key", "duplicate primary key");
         rows.push_back(std::move(row));
     }
 

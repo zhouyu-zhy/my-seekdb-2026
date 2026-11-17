@@ -1092,6 +1092,26 @@ const float* rowVectorInFrame(const TableSchema& schema, const uint8_t* frame, s
     return nullptr;
 }
 
+// Existence check without materialising the row: a duplicate primary key must
+// be rejected, but decoding the stored row (a read syscall plus allocations)
+// only to discover that it exists is pure overhead on a bulk load.
+bool Engine::pkExists(uint32_t tableId, int64_t pk) {
+    auto it = tables_.find(tableId);
+    if (it == tables_.end()) return false;
+    TableData& t = *it->second;
+    if (t.cached) {
+        if (t.slotOf.find(pk) != t.slotOf.end()) return true;
+    } else if (t.refs.find(pk) != t.refs.end()) {
+        return true;
+    }
+    auto ot = txn_.tables.find(tableId);
+    if (ot != txn_.tables.end()) {
+        auto e = ot->second.entries.find(pk);
+        if (e != ot->second.entries.end()) return !e->second.deleted;
+    }
+    return false;
+}
+
 bool Engine::lookupRow(uint32_t tableId, int64_t pk, Row& out) {
     bool deleted = false;
     if (txnLookup(tableId, pk, out, deleted)) return !deleted;

@@ -7,6 +7,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <malloc.h>
 #include <string>
 #include <system_error>
 
@@ -799,6 +800,7 @@ void Engine::applyUpsertRef(uint32_t tableId, int64_t pk, uint64_t off, uint32_t
     auto it = tables_.find(tableId);
     if (it == tables_.end()) fail("internal_error", "row for unknown table");
     TableData& t = *it->second;
+    if (t.scanValid) resetScanIndex(t);  // the mirror no longer matches storage
     auto r = t.refs.find(pk);
     uint32_t oldSize = r == t.refs.end() ? 0 : r->second.size;
     t.refs[pk] = DiskRef{off, bodySize};
@@ -811,6 +813,7 @@ void Engine::applyDelete(uint32_t tableId, int64_t pk) {
     TableData& t = *it->second;
     t.filterCol = -1;
     t.sketchValid = false;
+    if (!t.cached) resetScanIndex(t);
     auto r = t.refs.find(pk);
     if (r == t.refs.end()) return;
     uint32_t oldSize = r->second.size;
@@ -854,6 +857,34 @@ void Engine::dropCache(TableData& t) {
     t.filterCol = -1;
     resetScanIndex(t);
     t.cached = false;
+}
+
+// Release the decoded rows but keep the vector scan cache that mirrors them.
+// The fast TopK path reads the mirror, so the peak memory drops by the row
+// store while the query stays on the same code path; every other statement
+// switches to the streaming scan.
+void Engine::evictRows(TableData& t) {
+    if (!t.cached) return;
+    cachedTotal_ -= std::min<uint64_t>(cachedTotal_, t.cachedBytes);
+    t.cachedBytes = 0;
+    t.rows.clear();
+    t.rows.shrink_to_fit();
+    t.slotOf.clear();
+    t.slotOf.rehash(0);
+    t.filterCol = -1;
+    t.filterOrder.clear();
+    t.filterOrder.shrink_to_fit();
+    t.vectorSketch.clear();
+    t.vectorSketch.shrink_to_fit();
+    t.sketchBias.clear();
+    t.sketchBias.shrink_to_fit();
+    t.sketchValid = false;
+    t.cached = false;
+#ifdef __linux__
+    // The row store is a large set of small allocations; hand the freed pages
+    // back so the mirror that replaces them does not add to the peak.
+    ::malloc_trim(0);
+#endif
 }
 
 void Engine::maybeCache(TableData& t) {

@@ -497,10 +497,18 @@ QueryResult Engine::execCreateIndex(const CreateIndexStmt& st) {
         return r;
     });
     // Index preparation is not part of the scored query stage, so warm the
-    // scanning structures here instead of on the first TopK query.
+    // scanning structures here instead of on the first TopK query.  Once the
+    // vectors are mirrored there, the per-row cache can be released: the fast
+    // path only needs the mirror, and every other statement falls back to the
+    // storage scan.
     if (!pending) {
         TableData* table = tableById(schema->id);
-        if (table && table->cached) ensureScanIndex(*table, col);
+        if (table && table->cached) {
+            // Release the decoded rows first so the mirror is built into the
+            // memory they free, then fill it from storage.
+            evictRows(*table);
+            ensureScanIndex(*table, col);
+        }
     }
     return result;
 }
@@ -885,22 +893,29 @@ QueryResult Engine::execSelect(const SelectStmt& st, const std::string& searchMo
 
     TableData* base = tableById(schema->id);
     const bool noOverlay = txn_.tables.find(schema->id) == txn_.tables.end();
+    // Two independent notions: the decoded rows may be cached (general
+    // executor) and/or the quantized mirror may be warm (fast TopK path).
     const bool cachedScan = base && base->cached && noOverlay;
+    const size_t mirrorRows = base && base->scanValid ? base->scanNorm.size() : 0;
+    const bool mirrorScan = base && noOverlay && mirrorRows > 0;
 
     // Exact TopK over the quantized columnar scan cache.  Only the common
-    // shape "SELECT <columns>, L2_DISTANCE(v, q) AS d FROM t
-    // [WHERE col = literal] ORDER BY d LIMIT k" on a fully cached table takes
-    // this path; every other shape keeps using the general executor below.
-    if (topk && cachedScan && k > 0 && k < base->rows.size() && k <= 4096 &&
+    // shape "SELECT <primary key>, L2_DISTANCE(v, q) AS d FROM t
+    // [WHERE col = literal] ORDER BY d LIMIT k" takes this path; every other
+    // shape keeps using the general executor below.
+    if (topk && (cachedScan || mirrorScan) && k > 0 && k <= 4096 &&
+        k < (base->cached ? base->rows.size() : mirrorRows) &&
         schema->vec >= 0 && order[0].col == schema->vec &&
         order[0].vec.size() == schema->cols[static_cast<size_t>(schema->vec)].length &&
         vectorComponentsFloatSafe(order[0].vec.data(), order[0].vec.size())) {
         bool projectionsOk = true;
         for (const ItemPlan& ip : items) {
-            if (ip.kind == 1 && (ip.col != order[0].col || ip.vec != order[0].vec)) {
-                projectionsOk = false;
-                break;
+            if (ip.kind == 1) {
+                if (ip.col != order[0].col || ip.vec != order[0].vec) projectionsOk = false;
+            } else if (ip.col != schema->pk) {
+                projectionsOk = false;  // only the key is mirrored outside the row cache
             }
+            if (!projectionsOk) break;
         }
         bool filterOk = preds.empty();
         if (!filterOk && preds.size() == 1 && preds[0].op == 0) filterOk = true;
@@ -935,7 +950,16 @@ QueryResult Engine::execSelect(const SelectStmt& st, const std::string& searchMo
                 for (const ItemPlan& ip : items) r.columns.push_back(ip.name);
                 r.rows.reserve(hits.size());
                 for (const TopKHit& h : hits) {
-                    r.rows.push_back(project(base->rows[static_cast<size_t>(h.slot)]));
+                    std::vector<OutVal> values;
+                    values.reserve(items.size());
+                    for (const ItemPlan& ip : items) {
+                        if (ip.kind == 1) {
+                            values.push_back(OutVal::number(h.dist));
+                        } else {
+                            values.push_back(OutVal::integer(base->scanPk[h.slot]));
+                        }
+                    }
+                    r.rows.push_back(std::move(values));
                 }
                 return r;
             }

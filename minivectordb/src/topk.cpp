@@ -334,16 +334,84 @@ void Engine::resetScanIndex(TableData& t) {
     t.strCodes.clear();
 }
 
+// Stream the stored rows to fill the scan mirror after the decoded row cache
+// was released.  Index preparation is not part of the scored query stage, so
+// the extra pass over the file is acceptable; the mirror is what the fast path
+// reads afterwards.
+bool Engine::buildScanIndexFromStorage(TableData& t, int vecCol) {
+    const size_t dim = t.schema.cols[static_cast<size_t>(vecCol)].length;
+    const size_t n = t.refs.size();
+    if (n == 0 || dim == 0) return false;
+    t.scanVec = vecCol;
+    t.scanDim = static_cast<uint32_t>(dim);
+    t.scanNorm.assign(n, 0);
+    t.scanQ.assign(n * dim, 63);
+    t.scanVecs.assign(n * dim, 0.0f);
+    t.scanPk.resize(n);
+    t.codeCol = -1;
+    t.codes.clear();
+    t.intCodes.clear();
+    t.strCodes.clear();
+
+    float maxAbs = 0;
+    size_t seen = 0;
+    bool safe = true;
+    scanRows(t.schema.id, [&](const Row& row) {
+        const std::vector<float>& v = row[static_cast<size_t>(vecCol)].v;
+        if (v.size() != dim || !vectorComponentsFloatSafe(v.data(), dim)) {
+            safe = false;
+            return true;
+        }
+        for (float x : v) maxAbs = std::max(maxAbs, std::fabs(x));
+        ++seen;
+        return true;
+    });
+    if (!safe || seen != n) {
+        t.scanSafe = false;
+        t.scanValid = true;
+        return false;
+    }
+    const float scale = maxAbs > 0 ? maxAbs / static_cast<float>(kCodeLimit) : 1.0f;
+    t.scanScale = scale;
+    const float inv = 1.0f / scale;
+    size_t slot = 0;
+    scanRows(t.schema.id, [&](const Row& row) {
+        const std::vector<float>& v = row[static_cast<size_t>(vecCol)].v;
+        float* arena = t.scanVecs.data() + slot * dim;
+        std::memcpy(arena, v.data(), dim * sizeof(float));
+        uint8_t* dst = t.scanQ.data() + slot * dim;
+        int32_t norm = 0;
+        for (size_t j = 0; j < dim; ++j) {
+            const int c = quantize(v[j], inv);
+            dst[j] = static_cast<uint8_t>(c + kCodeLimit);
+            norm += c * c;
+        }
+        t.scanNorm[slot] = norm;
+        t.scanPk[slot] = row[static_cast<size_t>(t.schema.pk)].i;
+        ++slot;
+        return true;
+    });
+    t.scanValid = true;
+    t.scanSafe = slot == n;
+    return t.scanSafe;
+}
+
 bool Engine::ensureScanIndex(TableData& t, int vecCol) {
     if (vecCol < 0 || static_cast<size_t>(vecCol) >= t.schema.cols.size()) return false;
     const Column& column = t.schema.cols[static_cast<size_t>(vecCol)];
     if (column.type != ColType::VECTOR || column.length == 0) return false;
     const size_t dim = column.length;
     const size_t rows = t.rows.size();
+    // With the row cache released the live row count comes from the storage
+    // index, and the mirror must already cover exactly those rows.
+    const size_t expected = rows > 0 ? rows : t.refs.size();
     const bool sized = t.scanValid && t.scanVec == vecCol && t.scanDim == dim &&
-                       t.scanNorm.size() == rows && t.scanQ.size() == rows * dim &&
-                       t.scanVecs.size() == rows * dim;
+                       t.scanNorm.size() == expected && t.scanQ.size() == expected * dim &&
+                       t.scanVecs.size() == expected * dim;
     if (sized) return t.scanSafe;
+    // The decoded rows were released after preparation: rebuild the mirror by
+    // streaming the stored rows instead.
+    if (rows == 0 && !t.refs.empty()) return buildScanIndexFromStorage(t, vecCol);
 
     t.scanVec = vecCol;
     t.scanDim = static_cast<uint32_t>(dim);
@@ -418,15 +486,28 @@ int32_t Engine::codeForValue(TableData& t, const Value& v) {
 }
 
 void Engine::ensureFilterCodes(TableData& t, int col, bool isInt) {
-    if (t.codeCol == col && t.codeIsInt == isInt && t.codes.size() == t.rows.size()) return;
+    const size_t mirror = t.scanNorm.size();
+    if (t.codeCol == col && t.codeIsInt == isInt && t.codes.size() == mirror) return;
     t.codeCol = col;
     t.codeIsInt = isInt;
-    t.codes.assign(t.rows.size(), -1);
     t.intCodes.clear();
     t.strCodes.clear();
-    for (size_t i = 0; i < t.rows.size(); ++i) {
-        t.codes[i] = codeForValue(t, t.rows[i][static_cast<size_t>(col)]);
+    if (!t.rows.empty()) {
+        t.codes.assign(t.rows.size(), -1);
+        for (size_t i = 0; i < t.rows.size(); ++i) {
+            t.codes[i] = codeForValue(t, t.rows[i][static_cast<size_t>(col)]);
+        }
+        return;
     }
+    // Mirror is warm but the rows are gone: stream the stored rows in the same
+    // order the mirror was built with.
+    t.codes.assign(mirror, -1);
+    size_t slot = 0;
+    scanRows(t.schema.id, [&](const Row& row) {
+        if (slot < mirror) t.codes[slot] = codeForValue(t, row[static_cast<size_t>(col)]);
+        ++slot;
+        return true;
+    });
 }
 
 bool Engine::filterCode(const TableData& t, int type, int64_t i, const std::string& s,

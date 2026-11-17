@@ -345,9 +345,11 @@ private:
     void scanRows(uint32_t tableId, const std::function<bool(const Row&)>& fn);
     void maybeCache(TableData& table);
     void dropCache(TableData& table);
+    void evictRows(TableData& table);
 
     // columnar TopK scan cache
     bool ensureScanIndex(TableData& t, int vecCol);
+    bool buildScanIndexFromStorage(TableData& t, int vecCol);
     void ensureFilterCodes(TableData& t, int col, bool isInt);
     bool filterCode(const TableData& t, int type, int64_t i, const std::string& s,
                     int32_t& code) const;

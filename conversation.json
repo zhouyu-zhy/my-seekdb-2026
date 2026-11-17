@@ -1,6 +1,6 @@
 {
   "schema": "agent-learning-evidence-v3-unbounded",
-  "material_type": "real_session_record",
+  "material_type": "real_session_record_with_agent_assistance",
   "synthetic": false,
   "language": "zh-CN",
   "provenance": {
@@ -1511,11 +1511,9 @@
       "limitation": "还没有覆盖未知表、语法错误、类型错误、错误后执行 ROLLBACK，以及错误发生在 INSERT 或 DELETE 内部时事务状态是否同样保持。"
     }
   ],
-  "summary": "MiniVectorDB加赛Agent prompt材料。学生提供任务与仓库约束，完成核心实验的判断、结果解释、迁移复盘和问题拆解；Agent生成题目、代码并执行实验。材料共40个证据单元，其中11个2.0、3个1.5、25个1.0、1个0.5，本地自评52.0/100。实际输出来自本机Linux复测或学生提供的all-results.json与run.log。",
+  "summary": "MiniVectorDB加赛Agent prompt材料。学生提供任务与仓库约束，完成核心实验的判断、结果解释、迁移复盘和问题拆解；Agent生成题目、代码并执行实验。材料共40个证据单元，包含2.0、1.5、1.0和0.5档；实际输出来自本机Linux复测或学生提供的all-results.json与run.log。平台评分以独立评审为准。",
   "material_summary": {
     "unit_count": 40,
-    "score_scale": "0-100",
-    "local_score_estimate": 52.0,
     "score_2_0": 11,
     "score_1_5": 3,
     "score_1_0": 25,
@@ -1524,12 +1522,9 @@
     "agent_assistance": true,
     "prompt_commit": "5d6f53493f0c9b04c6de1c4edf42d33fbe46a235",
     "integration_commit": "0a7ae3ee7c18da22601303cc456d47055fafdae5",
-    "note": "本地自评只用于检查材料，不是平台分数；平台评分以锁定材料独立评审为准。",
+    "note": "本地自评分只用于内部检查，不是平台分数；平台独立评审为准。",
     "abstract": "真实学生证据记录。40个单元，11个2.0、3个1.5、25个1.0、1个0.5；题目由Agent生成，判断、解释、迁移和拆解由学生提供，实际结果来自本机复测或学生原始日志。"
   },
-  "agent_assistance": true,
-  "score_scale": "0-100",
-  "local_score": 52.0,
   "planning_transfer": {
     "core_unit": "unit-p1-decomposition",
     "prediction": "我预期数据从 30,000 行翻倍到 60,000 行后，文件会从约 16.2 MB 增到约 32.5 MB，但 4 MiB 缓存不变；TopK 返回的 id 和距离应基本不变，峰值 RSS 只会小幅增长而不是翻倍，因为查询按需读取数据、不把整表常驻内存；重启后最大 id 应为 60,000，因为写入已持久化。",
@@ -1537,5 +1532,10 @@
     "result_actual": "PLAN60_FILE_BYTES 32466343; PLAN60_HWM VmHWM: 9392 kB; PLAN60_RESTART_LAST [[60000]]; TopK 不变。",
     "limitation": "这次迁移仍未覆盖 10 倍数据量、并发查询、缓存淘汰策略、恢复耗时以及删除后的文件空洞，因此还不能说明所有超过内存预算的场景都同样稳定。",
     "performance_recheck": "性能合并后最终构建复测：30k 峰值 8768 kB，60k 峰值 9392 kB；学生原文的 9068 kB 来自优化前构建。结论仍成立。"
+  },
+  "lab_protocol": {
+    "questions_file": "Q.md",
+    "answers_file": "A.md",
+    "note": "题目在Q.md和A.md系列文件中迭代；学生回答保存在A.md、A(1).md、A(2).md、A(3).md、A(4).md、A(5).md、A(6).md、A(7).md；Q16到Q50的原始结果保存在all-results.json和run.log；Q40由Agent用Docker实际验证。"
   }
 }

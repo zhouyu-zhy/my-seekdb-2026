@@ -7,7 +7,7 @@
     "session_date": "2026-11-16",
     "repository": "https://github.com/zhouyu-zhy/my-seekdb-2026",
     "branch": "2026-competition-round2",
-    "note": "本文件记录同一分支上的开发会话。Q01到Q50的题目由Agent生成，回答由学生提供；Q01到Q15的实验在Linux构建上复测，Q16到Q50使用学生提供的原始记录；C1到C8的迁移回答由学生写入A(4).md，实际结果来自本机复测和原始日志。role=agent的条目保留来源标注。",
+    "note": "本文件记录同一分支上的开发会话。Q01到Q50的题目由Agent生成，回答由学生提供；Q01到Q15在Linux构建上复测，Q16到Q50使用学生提供的原始记录；C1到C8和E1、E2的迁移回答由学生写入A(4).md和A(5).md，实际结果来自本机复测。GitHub token已脱敏。",
     "additional_session": {
       "session_date": "2026-11-16",
       "base_commit": "bbbd63957d42d2ebf7ec7ddfad9283141a50b007",
@@ -889,7 +889,7 @@
     {
       "id": "unit-q04-checkpoint",
       "dimension": "技术理解与迁移",
-      "score": 1.5,
+      "score": 2.0,
       "student_evidence": {
         "pointer": "/experiments/5/student_prediction/content",
         "quote": "如果 checkpoint 在写新文件时崩溃，重启应继续使用旧的完整 checkpoint；只有新文件完整写入并持久化、且活动版本完成原子切换后，恢复才应选择新文件。"
@@ -898,11 +898,20 @@
         "pointer": "/experiments/5/output",
         "quote": "Q04_HALF_NEW_FILE_IGNORED {\"id\": 1, \"ok\": true, \"columns\": [\"id\"], \"rows\": [[1], [2]]}"
       },
-      "reason": "学生预测半写新文件不能选用；实际构造半写 rows_99.dat 后重启仍读取 rows_0.dat，文件 1 和 2 都在，半写文件被清理，结果与预测一致，按 1 分档。 A(1).md 已补充结果后解释，但没有修正和复测，仍按 1 分档。 A(3)原文的B/E与本机复测输出不一致，当前保持1分档，待修正后再升级。 学生修订B/E后与本机复测一致，增加了复测输出，按1.5分档。",
+      "reason": "学生预测半写新文件不能选用；实际构造半写 rows_99.dat 后重启仍读取 rows_0.dat，文件 1 和 2 都在，半写文件被清理，结果与预测一致，按 1 分档。 A(1).md 已补充结果后解释，但没有修正和复测，仍按 1 分档。 A(3)原文的B/E与本机复测输出不一致，当前保持1分档，待修正后再升级。 学生修订B/E后与本机复测一致，增加了复测输出，按1.5分档。 增加了多表checkpoint/未知列事务迁移和局限分析，按2.0分档。",
       "provenance": "A.md Q04 + Q.md Q04 结果",
       "retest_evidence": {
         "pointer": "/experiments/5/retest_actual",
         "quote": "Q04_CATALOG epoch=1 active=rows_1.dat; Q04_COUNT 15000 via SELECT id"
+      },
+      "transfer_evidence": {
+        "prediction_pointer": "/transfer_records/8/prediction",
+        "prediction_quote": "我预期两张表 a 和 b 都能恢复，各自的向量索引元数据也会保留，不会只恢复最后一张表。理由是 checkpoint 后 catalog 应记录每张表的活动数据文件和索引信息，重启按 catalog 逐表恢复。",
+        "explanation_pointer": "/transfer_records/8/explanation",
+        "result_pointer": "/transfer_records/8/result_actual",
+        "result_quote": "a 返回 [1,[0.0,0.0]]，b 返回 [2,[1.0,0.0]]；ia 和 ib 再次建索引都返回 index_exists。",
+        "limitation_pointer": "/transfer_records/8/limitation",
+        "limitation_quote": "还没有覆盖多表同时触发 checkpoint、目录 fsync 失败、索引重建成本以及更多表下的恢复顺序，因此多表恢复的边界条件仍需验证。"
       }
     },
     {
@@ -1057,7 +1066,7 @@
     {
       "id": "unit-q12-unsupported",
       "dimension": "独立验证与质疑",
-      "score": 1.5,
+      "score": 2.0,
       "student_evidence": {
         "pointer": "/experiments/13/student_prediction/content",
         "quote": "JOIN 和 ALTER TABLE 都应返回 `unsupported_statement`。如果错误发生在 BEGIN 之后，事务本身不应被自动提交或回滚"
@@ -1066,11 +1075,20 @@
         "pointer": "/experiments/13/output",
         "quote": "Q12_ROWS_IN_TXN {\"id\": 6, \"ok\": true, \"columns\": [\"id\"], \"rows\": [[1]]}"
       },
-      "reason": "学生预测语句失败不影响事务，实际 id 1 在事务内和 COMMIT 后都保留；实际错误码为 unsupported_sql，与预测名称有差异，按 1 分档。 本机复测与原文一致，增加了第二次实际输出，按1.5分档。",
+      "reason": "学生预测语句失败不影响事务，实际 id 1 在事务内和 COMMIT 后都保留；实际错误码为 unsupported_sql，与预测名称有差异，按 1 分档。 本机复测与原文一致，增加了第二次实际输出，按1.5分档。 增加了多表checkpoint/未知列事务迁移和局限分析，按2.0分档。",
       "provenance": "A(1).md Q12 + Q.md Q12 结果",
       "retest_evidence": {
         "pointer": "/experiments/13/retest_output",
         "quote": "Q12_COMMIT_ROWS {\"id\": 13, \"ok\": true, \"columns\": [\"id\"], \"rows\": [[1]]}"
+      },
+      "transfer_evidence": {
+        "prediction_pointer": "/transfer_records/9/prediction",
+        "prediction_quote": "我预期 SELECT missing FROM t 返回 column_not_found；BEGIN 后已插入的 id=2 应保留，错误查询不会撤销事务内已有修改，COMMIT 后 id=1、id=2 仍应存在。理由是未知列属于当前语句错误，不应让整个事务失效。",
+        "explanation_pointer": "/transfer_records/9/explanation",
+        "result_pointer": "/transfer_records/9/result_actual",
+        "result_quote": "SELECT missing FROM t 返回 column_not_found；事务内 rows 为 [[1],[2]]，COMMIT 后仍为 [[1],[2]]。",
+        "limitation_pointer": "/transfer_records/9/limitation",
+        "limitation_quote": "还没有覆盖未知表、语法错误、类型错误、错误后执行 ROLLBACK，以及错误发生在 INSERT 或 DELETE 内部时事务状态是否同样保持。"
       }
     },
     {
@@ -1672,13 +1690,9 @@
     "实现限制：不支持 NULL、JOIN、聚合、子查询、OR、ALTER、DROP、外键、主键更新和嵌套事务；大事务的 overlay 仍在内存中构建。",
     "验证限制：性能数字来自开发机 WSL2，不是评测机；没有实现真正的 IVF/HNSW，ann 模式返回精确结果。",
     "Q01到Q50的题目由Agent生成，回答由学生提供；Q16到Q50没有实验前预测，按1分档。Q40已由Agent在Linux Docker实际运行；Q35、Q38、Q39已从材料删除。",
-    "C1到C8的迁移回答来自学生A(4).md，实际结果来自本机复测；每个核心单元已补局限分析。其余单元保持原有档位，未把Agent解释算作学生迁移证据。"
+    "C1到C8的迁移回答来自学生A(4).md，实际结果来自本机复测；每个核心单元已补局限分析。其余单元保持原有档位，未把Agent解释算作学生迁移证据。",
+    "E1、E2的迁移回答来自学生A(5).md，实际结果来自本机复测；当前文件已接近128 KiB，后续不再直接追加普通实例。"
   ],
-  "lab_protocol": {
-    "questions_file": "Q.md",
-    "answers_file": "A.md",
-    "note": "题目在Q.md和A.md系列文件中迭代；学生回答保存在A.md、A(1).md、A(2).md，Q16到Q50的原始结果保存在all-results.json和run.log；Q40由Agent用Docker实际验证。"
-  },
   "student_confirmation": {
     "author": "student",
     "confirmed_at": "2026-11-16",
@@ -1689,35 +1703,6 @@
   "attribution_correction": {
     "superseded_remote_commit": "99b3d29864c6f33ed3ac339f656a2f1e4d6a6bfe",
     "note": "远端曾把Q01到Q15标为Agent生成；学生说明A(1).md中的回答由本人撰写，本次恢复Q01到Q15的学生证据，同时保留题目由Agent生成的事实。"
-  },
-  "retest_summary": {
-    "date": "2026-11-16",
-    "upgraded_to_1_5": [
-      "unit-q11-insert",
-      "unit-q12-unsupported",
-      "unit-q15-failed-insert",
-      "unit-q32",
-      "unit-q04-checkpoint",
-      "unit-q10-limit",
-      "unit-q24",
-      "unit-q33",
-      "unit-q40",
-      "unit-q21"
-    ],
-    "matched": [
-      "Q11",
-      "Q12",
-      "Q15",
-      "Q32",
-      "Q04",
-      "Q10",
-      "Q21",
-      "Q24",
-      "Q33",
-      "Q40"
-    ],
-    "pending": [],
-    "note": "10个优先单元均已按本机复测完成1.5升级。"
   },
   "transfer_records": [
     {
@@ -1783,20 +1768,22 @@
       "explanation": "只读根文件系统加 /data 卷启动成功；AVX2 和 generic 对同一距离查询都输出 [[1,1]]；/data 只有 catalog.dat 和 rows_0.dat，没有 wal.log；AVX2、FMA、AVX2 二进制和 generic 二进制都存在，说明运行不依赖根文件系统写入。",
       "result_actual": "只读根文件系统加 /data 卷启动成功；AVX2 和 generic 对同一查询都输出 [[1,1]]；/data 只有 catalog.dat 和 rows_0.dat。",
       "limitation": "本机仍具备 AVX2 和 FMA，未在真实缺少这些指令的机器上验证入口回退分支，也未覆盖 generic 与 AVX2 在更大查询集上的结果一致性。"
+    },
+    {
+      "id": "E1",
+      "core_unit": "unit-q04-checkpoint",
+      "prediction": "我预期两张表 a 和 b 都能恢复，各自的向量索引元数据也会保留，不会只恢复最后一张表。理由是 checkpoint 后 catalog 应记录每张表的活动数据文件和索引信息，重启按 catalog 逐表恢复。",
+      "explanation": "实际重启后 a 返回 [1,[0.0,0.0]]，b 返回 [2,[1.0,0.0]]，两张表的行和向量都恢复；对 ia 再次建索引返回 index_exists，对 ib 也返回 index_exists，说明 checkpoint 后 catalog 保留了多表数据与索引元数据，恢复不是只恢复最后一张表。",
+      "result_actual": "a 返回 [1,[0.0,0.0]]，b 返回 [2,[1.0,0.0]]；ia 和 ib 再次建索引都返回 index_exists。",
+      "limitation": "还没有覆盖多表同时触发 checkpoint、目录 fsync 失败、索引重建成本以及更多表下的恢复顺序，因此多表恢复的边界条件仍需验证。"
+    },
+    {
+      "id": "E2",
+      "core_unit": "unit-q12-unsupported",
+      "prediction": "我预期 SELECT missing FROM t 返回 column_not_found；BEGIN 后已插入的 id=2 应保留，错误查询不会撤销事务内已有修改，COMMIT 后 id=1、id=2 仍应存在。理由是未知列属于当前语句错误，不应让整个事务失效。",
+      "explanation": "实际 SELECT missing FROM t 返回 column_not_found；错误后事务内 SELECT id FROM t ORDER BY id 返回 [[1],[2]]，COMMIT 成功，COMMIT 后仍返回 [[1],[2]]。说明错误查询只影响当前语句，事务内已插入的 id=2 没有被撤销，事务仍可正常提交。",
+      "result_actual": "SELECT missing FROM t 返回 column_not_found；事务内 rows 为 [[1],[2]]，COMMIT 后仍为 [[1],[2]]。",
+      "limitation": "还没有覆盖未知表、语法错误、类型错误、错误后执行 ROLLBACK，以及错误发生在 INSERT 或 DELETE 内部时事务状态是否同样保持。"
     }
-  ],
-  "transfer_summary": {
-    "count": 8,
-    "units": [
-      "unit-q21",
-      "unit-q11-insert",
-      "unit-q32",
-      "unit-q05-float",
-      "unit-q10-limit",
-      "unit-q07-varchar",
-      "unit-q37",
-      "unit-q40"
-    ],
-    "note": "C1到C8在同一实例中完成迁移验证和局限分析，按2.0分档。"
-  }
+  ]
 }

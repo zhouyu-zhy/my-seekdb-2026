@@ -169,29 +169,3 @@ with tempfile.TemporaryDirectory() as data:
     assert db.exec("SELECT id FROM d WHERE id >= 24497 ORDER BY id")==[[24497],[24498],[24499]]
     print(f"PASS interrupted recovery, WAL={wal.stat().st_size} bytes under a 64 MiB address-space cap; peak RSS={db.rss()} KiB",flush=True)
     db.end()
-
-
-# A candidate and its baseline should reopen each other's committed WAL. Run
-# the same statements in separate directories to compare the wire bytes too.
-with tempfile.TemporaryDirectory() as old_store, tempfile.TemporaryDirectory() as new_store:
-    def write_fixture(binary, path):
-        db = DB(binary, path)
-        db.exec("BEGIN")
-        db.exec("CREATE TABLE a (id BIGINT PRIMARY KEY, g VARCHAR(8), v VECTOR(3))")
-        db.exec("CREATE TABLE b (id BIGINT PRIMARY KEY, g VARCHAR(8), v VECTOR(3))")
-        db.exec("INSERT INTO b VALUES (8,'中','[1,-2,3]'),(2,'x','[-0.0,2e-40,1e38]')")
-        db.exec("INSERT INTO a VALUES (1,'a','[1,2,3]'),(4,'b','[4,5,6]')")
-        db.exec("UPDATE a SET v='[0,0,0]' WHERE id=4")
-        db.exec("DELETE FROM b WHERE id=8")
-        db.exec("CREATE VECTOR INDEX ai ON a(v)")
-        db.exec("COMMIT")
-        db.kill()
-        return next(Path(path).glob("rows_*.dat")).read_bytes()
-
-    assert write_fixture(before, old_store) == write_fixture(after, new_store)
-    for binary, path in [(before, new_store), (after, old_store)]:
-        db = DB(binary, path)
-        assert db.exec("SELECT id,L2_DISTANCE(v,'[0,0,0]') AS d FROM a ORDER BY d LIMIT 1") == [[4, 0]]
-        assert db.exec("SELECT id,g FROM b ORDER BY id") == [[2, "x"]]
-        db.end()
-print("PASS identical WAL bytes and bidirectional old/new recovery after SIGKILL", flush=True)

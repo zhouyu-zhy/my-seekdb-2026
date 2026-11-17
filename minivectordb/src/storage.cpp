@@ -7,7 +7,6 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
-#include <malloc.h>
 #include <string>
 #include <system_error>
 
@@ -16,7 +15,6 @@
 #include <windows.h>
 #else
 #include <fcntl.h>
-#include <sys/mman.h>
 #include <unistd.h>
 #endif
 
@@ -26,7 +24,7 @@ namespace fs = std::filesystem;
 
 namespace {
 
-uint32_t crcTable[8][256];
+uint32_t crcTable[256];
 bool crcReady = false;
 
 void initCrc() {
@@ -34,13 +32,7 @@ void initCrc() {
     for (uint32_t i = 0; i < 256; ++i) {
         uint32_t c = i;
         for (int k = 0; k < 8; ++k) c = (c & 1) ? (0xEDB88320u ^ (c >> 1)) : (c >> 1);
-        crcTable[0][i] = c;
-    }
-    for (size_t lane = 1; lane < 8; ++lane) {
-        for (size_t byte = 0; byte < 256; ++byte) {
-            const uint32_t previous = crcTable[lane - 1][byte];
-            crcTable[lane][byte] = crcTable[0][previous & 255] ^ (previous >> 8);
-        }
+        crcTable[i] = c;
     }
     crcReady = true;
 }
@@ -88,13 +80,13 @@ std::string getStr(const uint8_t*& p, const uint8_t* end) {
     return s;
 }
 
-[[maybe_unused]] void putFloat(std::vector<uint8_t>& out, float f) {
+void putFloat(std::vector<uint8_t>& out, float f) {
     uint32_t bits;
     std::memcpy(&bits, &f, sizeof(bits));
     putU32(out, bits);
 }
 
-[[maybe_unused]] float getFloat(const uint8_t*& p) {
+float getFloat(const uint8_t*& p) {
     uint32_t bits = getU32(p);
     float f;
     std::memcpy(&f, &bits, sizeof(f));
@@ -115,12 +107,6 @@ void syncFile(FILE* f) {
     if (::fsync(::fileno(f)) != 0) fail("io_error", "fsync failed");
 #endif
 }
-
-// Commit path: push the transaction block into the kernel so that it survives
-// process termination, which is the contest's crash model.  A device flush is
-// deliberately not requested per commit; the shutdown and checkpoint paths use
-// syncFile, and the block only becomes visible to recovery once it is complete.
-bool flushFile(FILE* f) { return std::fflush(f) == 0; }
 
 bool seekFile(FILE* f, uint64_t off) {
 #ifdef _WIN32
@@ -236,17 +222,7 @@ int TableSchema::vectorColumnCount() const {
 uint32_t crc32(const uint8_t* data, size_t len) {
     initCrc();
     uint32_t c = 0xFFFFFFFFu;
-    while (len >= 8) {
-        c ^= static_cast<uint32_t>(data[0]) | (static_cast<uint32_t>(data[1]) << 8) |
-             (static_cast<uint32_t>(data[2]) << 16) | (static_cast<uint32_t>(data[3]) << 24);
-        c = crcTable[7][c & 255] ^ crcTable[6][(c >> 8) & 255] ^
-            crcTable[5][(c >> 16) & 255] ^ crcTable[4][c >> 24] ^
-            crcTable[3][data[4]] ^ crcTable[2][data[5]] ^
-            crcTable[1][data[6]] ^ crcTable[0][data[7]];
-        data += 8;
-        len -= 8;
-    }
-    for (size_t i = 0; i < len; ++i) c = crcTable[0][(c ^ data[i]) & 255] ^ (c >> 8);
+    for (size_t i = 0; i < len; ++i) c = crcTable[(c ^ data[i]) & 0xFFu] ^ (c >> 8);
     return c ^ 0xFFFFFFFFu;
 }
 
@@ -273,12 +249,7 @@ void encodeRowBody(const TableSchema& schema, const Row& row, std::vector<uint8_
             putStr(out, v.s);
         } else {
             putU32(out, static_cast<uint32_t>(v.v.size()));
-#if defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
-            const auto* begin = reinterpret_cast<const uint8_t*>(v.v.data());
-            if (!v.v.empty()) out.insert(out.end(), begin, begin + v.v.size() * sizeof(float));
-#else
             for (float f : v.v) putFloat(out, f);
-#endif
         }
     }
 }
@@ -302,13 +273,7 @@ Row decodeRowBody(const TableSchema& schema, const uint8_t*& p, const uint8_t* e
                 fail("internal_error", "corrupt vector data");
             }
             row[i].v.resize(dim);
-#if defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
-            const size_t bytes = static_cast<size_t>(dim) * sizeof(float);
-            if (bytes > 0) std::memcpy(row[i].v.data(), p, bytes);
-            p += bytes;
-#else
             for (uint32_t k = 0; k < dim; ++k) row[i].v[k] = getFloat(p);
-#endif
         }
     }
     return row;
@@ -386,32 +351,7 @@ Engine::~Engine() { closeFiles(); }
 
 std::string joinPath(const std::string& dir, const std::string& name) { return dir + "/" + name; }
 
-void Engine::mapActive() {
-    unmapActive();
-#if defined(__linux__)
-    if (walSize_ == 0) return;
-    const int fd = ::open(joinPath(dir_, activeFile_).c_str(), O_RDONLY);
-    if (fd < 0) return;
-    void* p = ::mmap(nullptr, static_cast<size_t>(walSize_), PROT_READ, MAP_PRIVATE, fd, 0);
-    ::close(fd);
-    if (p == MAP_FAILED) return;
-    map_ = static_cast<const uint8_t*>(p);
-    mapSize_ = static_cast<size_t>(walSize_);
-#endif
-}
-
-void Engine::unmapActive() {
-#if defined(__linux__)
-    if (map_) {
-        ::munmap(const_cast<uint8_t*>(map_), mapSize_);
-    }
-#endif
-    map_ = nullptr;
-    mapSize_ = 0;
-}
-
 void Engine::closeFiles() {
-    unmapActive();
     if (wal_) {
         std::fclose(wal_);
         wal_ = nullptr;
@@ -488,7 +428,6 @@ void Engine::openActiveFile() {
     walSize_ = fileSize(wal_);
     seekFile(wal_, walSize_);
     reopenReadFile();
-    mapActive();
 }
 
 void Engine::reopenReadFile() {
@@ -614,7 +553,7 @@ void Engine::appendBlock(const std::vector<uint8_t>& payload, uint64_t* blockSta
         !writeAll(wal_, tail.data(), tail.size())) {
         fail("io_error", "write failed");
     }
-    if (!flushFile(wal_)) fail("io_error", "flush failed");
+    syncFile(wal_);
     walSize_ += header.size() + payload.size() + tail.size();
 }
 
@@ -638,9 +577,8 @@ void Engine::addSchema(const TableSchema& schema) {
     tables_[schema.id] = std::move(td);
 }
 
-void Engine::buildPayload(std::vector<uint8_t>& payload, std::vector<Row*>& upserts) {
+void Engine::buildPayload(std::vector<uint8_t>& payload) {
     payload.clear();
-    upserts.clear();
     auto appendFrame = [&](uint8_t type, const std::function<void()>& body) {
         size_t start = payload.size();
         payload.push_back(type);
@@ -660,36 +598,28 @@ void Engine::buildPayload(std::vector<uint8_t>& payload, std::vector<Row*>& upse
         pks.reserve(ot->second.entries.size());
         for (const auto& kv : ot->second.entries) pks.push_back(kv.first);
         std::sort(pks.begin(), pks.end());
-        const TableSchema* schema = nullptr;
-        auto table = tables_.find(tableId);
-        if (table != tables_.end()) schema = &table->second->schema;
-        else {
-            for (const TableSchema& s : txn_.newTables) {
-                if (s.id == tableId) { schema = &s; break; }
-            }
-        }
-        if (!schema) fail("internal_error", "row for unknown table");
-        size_t bytes = payload.size();
-        size_t rowCount = upserts.size();
-        for (const auto& kv : ot->second.entries) {
-            bytes += kv.second.deleted ? 17 : 9 + rowBodySize(*schema, kv.second.row);
-            rowCount += !kv.second.deleted;
-        }
-        payload.reserve(bytes);
-        upserts.reserve(rowCount);
         for (int64_t pk : pks) {
-            OverlayEntry& e = ot->second.entries.at(pk);
+            const OverlayEntry& e = ot->second.entries.at(pk);
             if (e.deleted) {
                 appendFrame(OP_DELETE, [&]() {
                     putU32(payload, tableId);
                     putI64(payload, pk);
                 });
             } else {
+                const TableSchema* schema = nullptr;
+                auto existing = tables_.find(tableId);
+                if (existing != tables_.end()) {
+                    schema = &existing->second->schema;
+                } else {
+                    for (const TableSchema& s : txn_.newTables) {
+                        if (s.id == tableId) { schema = &s; break; }
+                    }
+                }
+                if (!schema) fail("internal_error", "row for unknown table");
                 appendFrame(OP_UPSERT, [&]() {
                     putU32(payload, tableId);
                     encodeRowBody(*schema, e.row, payload);
                 });
-                upserts.push_back(&e.row);
             }
         }
     };
@@ -720,9 +650,7 @@ void Engine::buildPayload(std::vector<uint8_t>& payload, std::vector<Row*>& upse
     }
 }
 
-void Engine::applyPayload(const std::vector<uint8_t>& payload, uint64_t payloadOffset,
-                          const std::vector<Row*>* committedRows) {
-    size_t upsert = 0;
+void Engine::applyPayload(const std::vector<uint8_t>& payload, uint64_t payloadOffset) {
     const uint8_t* p = payload.data();
     const uint8_t* end = p + payload.size();
     while (p < end) {
@@ -744,21 +672,17 @@ void Engine::applyPayload(const std::vector<uint8_t>& payload, uint64_t payloadO
             if (it == tables_.end()) fail("internal_error", "row for unknown table");
             TableData* t = it->second.get();
             const uint8_t* rowStart = p;
-            const uint32_t bodySize = static_cast<uint32_t>(frameEnd - rowStart);
-            if (t->cached && committedRows) {
-                // The WAL bytes are durable. Adopt the already validated row
-                // from the transaction without decoding and allocating it again.
-                applyUpsertRow(tableId, *committedRows->at(upsert), payloadOffset + frameStart, bodySize);
-            } else if (t->cached) {
+            if (t->cached) {
                 Row row = decodeRowBody(t->schema, p, frameEnd);
+                uint32_t bodySize = static_cast<uint32_t>(frameEnd - rowStart);
                 applyUpsertRow(tableId, row, payloadOffset + frameStart, bodySize);
             } else {
                 if (frameEnd - p < 8) fail("internal_error", "corrupt row key");
                 const uint8_t* q = rowStart;
                 int64_t pk = getI64(q);
+                uint32_t bodySize = static_cast<uint32_t>(frameEnd - rowStart);
                 applyUpsertRef(tableId, pk, payloadOffset + frameStart, bodySize);
             }
-            ++upsert;
         } else if (type == OP_DELETE) {
             if (frameEnd - p < 12) fail("internal_error", "corrupt delete");
             uint32_t tableId = getU32(p);
@@ -816,14 +740,6 @@ void Engine::applyUpsertRow(uint32_t tableId, Row& row, uint64_t off, uint32_t b
     t.refs[pk] = DiskRef{off, bodySize};
     t.liveBytes = t.liveBytes + bodySize - std::min<uint64_t>(t.liveBytes, oldSize);
 
-    if (t.cached && t.scanValid) {
-        auto slot = t.slotOf.find(pk);
-        if (slot != t.slotOf.end()) {
-            const size_t index = static_cast<size_t>(slot->second);
-            touchScanRow(t, index, t.rows[index], static_cast<uint32_t>(off));
-        }
-    }
-
     if (t.cached && cacheBudget_ > 0 && cachedTotal_ > cacheBudget_ * 3 / 4) {
         for (auto& kv : tables_) dropCache(*kv.second);
         cacheDisabled_ = true;
@@ -834,7 +750,6 @@ void Engine::applyUpsertRef(uint32_t tableId, int64_t pk, uint64_t off, uint32_t
     auto it = tables_.find(tableId);
     if (it == tables_.end()) fail("internal_error", "row for unknown table");
     TableData& t = *it->second;
-    if (t.scanValid) resetScanIndex(t);  // the mirror no longer matches storage
     auto r = t.refs.find(pk);
     uint32_t oldSize = r == t.refs.end() ? 0 : r->second.size;
     t.refs[pk] = DiskRef{off, bodySize};
@@ -847,7 +762,6 @@ void Engine::applyDelete(uint32_t tableId, int64_t pk) {
     TableData& t = *it->second;
     t.filterCol = -1;
     t.sketchValid = false;
-    if (!t.cached) resetScanIndex(t);
     auto r = t.refs.find(pk);
     if (r == t.refs.end()) return;
     uint32_t oldSize = r->second.size;
@@ -865,11 +779,9 @@ void Engine::applyDelete(uint32_t tableId, int64_t pk) {
                 t.rows[slot] = std::move(t.rows[last]);
                 int64_t movedPk = t.rows[slot][static_cast<size_t>(t.schema.pk)].i;
                 t.slotOf[movedPk] = static_cast<int>(slot);
-                if (t.scanValid) moveScanRow(t, last, slot);
             }
             t.rows.pop_back();
             t.slotOf.erase(pk);
-            if (t.scanValid) popScanRow(t);
         }
     }
 }
@@ -885,40 +797,9 @@ void Engine::dropCache(TableData& t) {
     t.filterOrder.shrink_to_fit();
     t.vectorSketch.clear();
     t.vectorSketch.shrink_to_fit();
-    t.sketchBias.clear();
-    t.sketchBias.shrink_to_fit();
     t.sketchValid = false;
     t.filterCol = -1;
-    resetScanIndex(t);
     t.cached = false;
-}
-
-// Release the decoded rows but keep the vector scan cache that mirrors them.
-// The fast TopK path reads the mirror, so the peak memory drops by the row
-// store while the query stays on the same code path; every other statement
-// switches to the streaming scan.
-void Engine::evictRows(TableData& t) {
-    if (!t.cached) return;
-    cachedTotal_ -= std::min<uint64_t>(cachedTotal_, t.cachedBytes);
-    t.cachedBytes = 0;
-    t.rows.clear();
-    t.rows.shrink_to_fit();
-    t.slotOf.clear();
-    t.slotOf.rehash(0);
-    t.filterCol = -1;
-    t.filterOrder.clear();
-    t.filterOrder.shrink_to_fit();
-    t.vectorSketch.clear();
-    t.vectorSketch.shrink_to_fit();
-    t.sketchBias.clear();
-    t.sketchBias.shrink_to_fit();
-    t.sketchValid = false;
-    t.cached = false;
-#ifdef __linux__
-    // The row store is a large set of small allocations; hand the freed pages
-    // back so the mirror that replaces them does not add to the peak.
-    ::malloc_trim(0);
-#endif
 }
 
 void Engine::maybeCache(TableData& t) {
@@ -1062,61 +943,6 @@ void Engine::checkpoint() {
     openActiveFile();
     walSize_ = newSize;
     seekFile(wal_, walSize_);
-}
-
-const float* rowVectorInFrame(const TableSchema& schema, const uint8_t* frame, size_t frameSize) {
-    if (frameSize < 5) return nullptr;
-    const uint8_t* end = frame + frameSize;
-    const uint8_t* p = frame + 5;  // skip op + length
-    if (end - p < 12) return nullptr;
-    p += 4;  // table id
-    p += 8;  // the body repeats the primary key before the columns
-    for (size_t i = 0; i < schema.cols.size(); ++i) {
-        const Column& col = schema.cols[i];
-        if (col.type == ColType::BIGINT) {
-            if (end - p < 8) return nullptr;
-            p += 8;
-        } else if (col.type == ColType::VARCHAR) {
-            if (end - p < 4) return nullptr;
-            uint32_t len = static_cast<uint32_t>(p[0]) | (static_cast<uint32_t>(p[1]) << 8) |
-                           (static_cast<uint32_t>(p[2]) << 16) | (static_cast<uint32_t>(p[3]) << 24);
-            p += 4;
-            if (static_cast<uint64_t>(end - p) < len) return nullptr;
-            p += len;
-        } else {
-            if (end - p < 4) return nullptr;
-            uint32_t dim = static_cast<uint32_t>(p[0]) | (static_cast<uint32_t>(p[1]) << 8) |
-                           (static_cast<uint32_t>(p[2]) << 16) | (static_cast<uint32_t>(p[3]) << 24);
-            p += 4;
-            if (static_cast<uint64_t>(end - p) < static_cast<uint64_t>(dim) * 4u) return nullptr;
-            if (static_cast<size_t>(i) == static_cast<size_t>(schema.vec) &&
-                dim == schema.cols[static_cast<size_t>(schema.vec)].length) {
-                return reinterpret_cast<const float*>(p);
-            }
-            p += static_cast<size_t>(dim) * 4u;
-        }
-    }
-    return nullptr;
-}
-
-// Existence check without materialising the row: a duplicate primary key must
-// be rejected, but decoding the stored row (a read syscall plus allocations)
-// only to discover that it exists is pure overhead on a bulk load.
-bool Engine::pkExists(uint32_t tableId, int64_t pk) {
-    auto it = tables_.find(tableId);
-    if (it == tables_.end()) return false;
-    TableData& t = *it->second;
-    if (t.cached) {
-        if (t.slotOf.find(pk) != t.slotOf.end()) return true;
-    } else if (t.refs.find(pk) != t.refs.end()) {
-        return true;
-    }
-    auto ot = txn_.tables.find(tableId);
-    if (ot != txn_.tables.end()) {
-        auto e = ot->second.entries.find(pk);
-        if (e != ot->second.entries.end()) return !e->second.deleted;
-    }
-    return false;
 }
 
 bool Engine::lookupRow(uint32_t tableId, int64_t pk, Row& out) {
